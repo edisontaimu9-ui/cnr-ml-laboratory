@@ -3,8 +3,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..db import get_db
-from ..models import Dataset, Experiment, ModelDefinition, ModelVersion
-from ..schemas import DatasetOut, ExperimentOut, ModelDefinitionOut, ModelVersionOut
+from ..models import Experiment, ModelDefinition, ModelVersion
+from ..schemas import ExperimentOut, ModelDefinitionOut, ModelVersionOut
 from ..security import require
 
 router = APIRouter(prefix="/v1", tags=["registry"])
@@ -35,9 +35,3 @@ def model_versions(limit: int = Query(50, ge=1, le=200), db: Session = Depends(g
             dependencies=[Depends(require("read:experiments"))])
 def experiments(limit: int = Query(50, ge=1, le=200), db: Session = Depends(get_db)):
     return db.scalars(select(Experiment).order_by(Experiment.id.desc()).limit(limit)).all()
-
-
-@router.get("/datasets", response_model=list[DatasetOut],
-            dependencies=[Depends(require("read:datasets"))])
-def datasets(limit: int = Query(50, ge=1, le=200), db: Session = Depends(get_db)):
-    return db.scalars(select(Dataset).order_by(Dataset.id.desc()).limit(limit)).all()

@@ -30,7 +30,48 @@ class DatasetOut(ORM):
     name: str
     description: str
     sensitivity: str
+    created_by: str | None = None
     created_at: UTC
+    version_count: int = 0
+
+
+class DatasetCreate(BaseModel):
+    name: str = Field(min_length=2, max_length=160)
+    description: str = Field(default="", max_length=2000)
+    sensitivity: Literal["restricted", "confidential", "internal"] = "restricted"
+
+
+class DatasetVersionOut(ORM):
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+    id: int
+    dataset_id: int
+    version: int
+    row_count: int
+    column_count: int
+    sha256: str
+    source_sha256: str | None
+    file_format: str | None
+    deidentified: bool
+    approval_ref: str | None
+    created_by: str | None
+    created_at: UTC
+    schema_info: dict[str, Any] = Field(validation_alias="schema_json")
+    report_json: dict[str, Any]
+
+
+class DatasetDetail(DatasetOut):
+    versions: list[DatasetVersionOut] = []
+
+
+class ColumnAction(BaseModel):
+    name: str = Field(max_length=200)
+    action: Literal["keep", "drop", "pseudonymise", "year_only"]
+    override_reason: str | None = Field(default=None, max_length=300)
+
+
+class IngestPlan(BaseModel):
+    columns: list[ColumnAction] = []
+    drop_duplicates: bool = True
 
 
 class ExperimentOut(ORM):

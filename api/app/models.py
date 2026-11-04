@@ -60,6 +60,14 @@ class DatasetVersion(Base):
     schema_json: Mapped[dict] = mapped_column(JSON, default=dict)
     deidentified: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    # Phase 2
+    column_count: Mapped[int] = mapped_column(Integer, default=0)
+    source_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    file_format: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    storage_uri: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    approval_ref: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    report_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
 
 
 class Experiment(Base):

@@ -5,12 +5,12 @@ from sqlalchemy.orm import Session
 from ..catalog import ROADMAP, SAFETY_NOTICE
 from ..config import get_settings
 from ..db import get_db
-from ..models import Dataset, Experiment, ModelDefinition, ModelVersion
+from ..models import Dataset, DatasetVersion, Experiment, ModelDefinition, ModelVersion
 from ..schemas import MeOut
 from ..security import Principal, get_principal
 
 router = APIRouter()
-CURRENT_PHASE = 1
+CURRENT_PHASE = 2
 
 
 @router.get("/health", tags=["system"])
@@ -41,6 +41,7 @@ def overview(_: Principal = Depends(get_principal), db: Session = Depends(get_db
         "counts": {
             "model_definitions": count(ModelDefinition),
             "datasets": count(Dataset),
+            "dataset_versions": count(DatasetVersion),
             "experiments": count(Experiment),
             "model_versions": count(ModelVersion),
             "deployed_models": count(ModelVersion, ModelVersion.status == "deployed"),

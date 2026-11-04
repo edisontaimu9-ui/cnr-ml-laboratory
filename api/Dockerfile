@@ -4,8 +4,9 @@ WORKDIR /srv
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY app ./app
-RUN useradd -m appuser && mkdir -p /srv/data && chown -R appuser /srv
-USER appuser
+COPY entrypoint.sh ./entrypoint.sh
+RUN useradd -m appuser && mkdir -p /srv/data && chown -R appuser /srv && chmod +x /srv/entrypoint.sh
+# Starts as root only to fix mounted-disk ownership; entrypoint.sh then drops to appuser.
 EXPOSE 8000
 # Render injects $PORT; default 8000 for local Docker
-CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --proxy-headers --forwarded-allow-ips='*'"]
+CMD ["/srv/entrypoint.sh"]

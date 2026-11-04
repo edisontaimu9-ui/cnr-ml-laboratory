@@ -14,9 +14,9 @@ from .models import ApiKey, utcnow
 _VIEW = {"read:catalog", "read:models", "read:experiments", "read:datasets"}
 ROLE_PERMISSIONS: dict[str, set[str]] = {
     "viewer": _VIEW,
-    "data_scientist": _VIEW | {"write:datasets", "write:experiments"},
+    "data_scientist": _VIEW | {"write:datasets", "write:experiments", "read:dataset_rows"},
     "clinical_reviewer": _VIEW | {"approve:models", "read:audit"},
-    "admin": _VIEW | {"write:datasets", "write:experiments", "approve:models",
+    "admin": _VIEW | {"write:datasets", "write:experiments", "read:dataset_rows", "approve:models",
                       "read:audit", "manage:keys", "deploy:models"},
 }
 

@@ -1,7 +1,7 @@
 import os
 from collections.abc import Iterator
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from .config import get_settings
@@ -31,3 +31,19 @@ def get_db() -> Iterator[Session]:
         yield db
     finally:
         db.close()
+
+
+def add_missing_columns() -> None:
+    """Additive-only migration. `create_all` never alters existing tables, so
+    columns introduced after Phase 1 are added here (idempotent, never drops)."""
+    insp = inspect(engine)
+    with engine.begin() as conn:
+        for table in Base.metadata.sorted_tables:
+            if not insp.has_table(table.name):
+                continue
+            have = {c["name"] for c in insp.get_columns(table.name)}
+            for col in table.columns:
+                if col.name in have:
+                    continue
+                ddl = col.type.compile(dialect=engine.dialect)
+                conn.execute(text(f'ALTER TABLE {table.name} ADD COLUMN {col.name} {ddl}'))

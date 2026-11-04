@@ -7,9 +7,9 @@ from sqlalchemy import select
 
 from .catalog import CATALOG, LABEL_NOTE
 from .config import get_settings
-from .db import Base, SessionLocal, engine
+from .db import Base, SessionLocal, add_missing_columns, engine
 from .models import ApiKey, ModelDefinition
-from .routers import admin, core, registry
+from .routers import admin, core, datasets, registry
 from .security import hash_key
 
 log = logging.getLogger("cnr-ml")
@@ -39,6 +39,7 @@ def _seed() -> None:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     Base.metadata.create_all(engine)
+    add_missing_columns()
     _seed()
     yield
 
@@ -67,5 +68,6 @@ async def security_headers(request, call_next):
 
 
 app.include_router(core.router)
+app.include_router(datasets.router)
 app.include_router(registry.router)
 app.include_router(admin.router)

@@ -21,7 +21,9 @@
   async function api(path, opts = {}) {
     let res;
     try {
-      res = await fetch(API + path, { ...opts, headers: { Authorization: "Bearer " + store.get(), "Content-Type": "application/json" } });
+      const headers = { Authorization: "Bearer " + store.get() };
+      if (!(opts.body instanceof FormData)) headers["Content-Type"] = "application/json";
+      res = await fetch(API + path, { ...opts, headers });
     } catch { throw new Error("Cannot reach the ML API. Check your connection and try again."); }
     if (res.status === 401) { signOut(); throw new Error("Your key was not accepted."); }
     if (!res.ok) { const b = await res.json().catch(() => ({})); throw new Error(b.detail || "Request failed (" + res.status + ")."); }
@@ -51,7 +53,7 @@
       h("ol", { class: "track" }, o.phase.roadmap.map((p) =>
         h("li", { class: p.phase === o.phase.current ? "current" : "", "aria-current": p.phase === o.phase.current ? "step" : null },
           h("span", { class: "n" }, "Phase " + p.phase), h("span", { class: "t" }, p.name)))),
-      c.datasets === 0 ? empty("No datasets yet", "Dataset ingestion arrives in Phase 2. Nothing has been trained and no model is available for predictions.") : null,
+      c.datasets === 0 ? empty("No datasets yet", "Create one under Datasets and upload a file. Nothing has been trained and no model is available for predictions.") : null,
       h("p", { class: "muted" }, "API " + o.service.version + " · " + o.service.environment),
     ];
   }
@@ -71,10 +73,143 @@
       : empty("No experiments yet", "Training runs and their metrics will appear here once the first XGBoost model is trained (Phase 3).")];
   }
 
-  async function datasets() {
+  const can = (perm) => me && me.permissions.includes(perm);
+  const field = (label, el, id) => h("div", null, h("label", { for: id }, label), el);
+
+  async function datasets(arg) {
+    if (arg) return datasetDetail(Number(arg));
     const rows = await api("/v1/datasets");
-    return [h("h1", null, "Datasets"), rows.length ? table(["Name", "Sensitivity", "Added"], rows.map((r) => [r.name, r.sensitivity, fmt(r.created_at)]))
-      : empty("No datasets yet", "CSV and Excel upload, validation and de-identification arrive in Phase 2. Do not upload patient data until they are in place.")];
+    const out = [h("h1", null, "Datasets"),
+      h("div", { class: "notice" }, "Uploaded files are analysed in memory. Only the de-identified table is stored; the original file is never kept. De-identified is not the same as anonymous: keep access restricted."),
+      can("write:datasets") ? createDatasetForm() : null];
+    out.push(rows.length ? table(["Name", "Sensitivity", "Versions", "Added", ""], rows.map((r) => [r.name, r.sensitivity, r.version_count, fmt(r.created_at),
+      h("button", { class: "link", onclick: () => { location.hash = "datasets/" + r.id; } }, "Open")]))
+      : empty("No datasets yet", can("write:datasets") ? "Create a dataset above, then upload a CSV or Excel file to it." : "A data scientist or admin can create the first dataset."));
+    return out;
+  }
+
+  function createDatasetForm() {
+    const name = h("input", { id: "dn", maxlength: 160 });
+    const desc = h("input", { id: "dd", maxlength: 2000 });
+    const sens = h("select", { id: "ds" }, ["restricted", "confidential", "internal"].map((x) => h("option", { value: x }, x)));
+    const err = h("p", { class: "error", role: "alert" });
+    const btn = h("button", { class: "primary", onclick: async () => {
+      err.textContent = "";
+      try {
+        const d = await api("/v1/datasets", { method: "POST", body: JSON.stringify({ name: name.value.trim(), description: desc.value.trim(), sensitivity: sens.value }) });
+        location.hash = "datasets/" + d.id;
+      } catch (e) { err.textContent = e.message; }
+    } }, "Create dataset");
+    return h("details", { class: "card" }, h("summary", null, "New dataset"),
+      h("div", { class: "form3" }, field("Name", name, "dn"), field("Description", desc, "dd"), field("Sensitivity", sens, "ds")), btn, err);
+  }
+
+  async function datasetDetail(id) {
+    const d = await api("/v1/datasets/" + id);
+    const out = [h("p", null, h("button", { class: "link", onclick: () => { location.hash = "datasets"; } }, "← All datasets")),
+      h("h1", null, d.name), h("p", null, d.description || "No description."),
+      h("p", { class: "muted" }, "Sensitivity: " + d.sensitivity + " · created by " + (d.created_by || "—") + " on " + fmt(d.created_at))];
+    if (can("write:datasets")) out.push(uploadWizard(d));
+    out.push(h("h2", null, "Versions"));
+    out.push(d.versions.length ? d.versions.map((v) => versionCard(d, v)) : empty("No versions yet", "Upload a file to create version 1."));
+    return out;
+  }
+
+  function versionCard(d, v) {
+    const r = v.report_json || {}, k = r.k_anonymity || {};
+    const preview = h("div");
+    const bits = [
+      h("div", { class: "row" }, h("h3", null, "Version " + v.version), h("span", { class: "badge" }, v.deidentified ? "de-identified" : "not de-identified")),
+      h("p", null, v.row_count.toLocaleString() + " rows × " + v.column_count + " columns · " + (v.file_format || "").toUpperCase() + " · by " + (v.created_by || "—") + " · " + fmt(v.created_at)),
+      h("small", null, "Approval: " + (v.approval_ref || "—") + " · SHA-256 " + v.sha256.slice(0, 12) + "…"),
+      reportBlock(r, k),
+    ];
+    if (can("read:dataset_rows")) bits.push(h("button", { onclick: async () => {
+      try {
+        const p = await api("/v1/datasets/" + d.id + "/versions/" + v.version + "/preview?rows=20");
+        preview.replaceChildren(table(p.columns, p.rows.map((row) => row.map((c) => c == null ? "—" : String(c)))));
+      } catch (e) { preview.replaceChildren(h("div", { class: "notice" }, e.message)); }
+    } }, "Preview 20 rows"), preview);
+    bits.push(h("details", null, h("summary", null, "Column summary"),
+      table(["Column", "Type", "Missing", "Unique", "Range / top values"], (v.schema_info.columns || []).map((c) => [c.name, c.kind, (c.missing_pct ?? 0) + "%", c.unique ?? "—", summary(c)]))));
+    return h("div", { class: "card" }, bits);
+  }
+
+  function summary(c) {
+    if (c.kind === "numeric" || c.kind === "date") return c.min == null ? "—" : c.min + " to " + c.max + (c.mean != null ? " (mean " + c.mean + ")" : "");
+    return (c.top || []).map((t) => t.value + " (" + t.count + ")").join(", ") || "—";
+  }
+
+  function reportBlock(r, k) {
+    const li = (t) => h("li", null, t);
+    const items = [];
+    if ((r.dropped || []).length) items.push(li("Dropped: " + r.dropped.map((x) => x.column).join(", ")));
+    if ((r.pseudonymised || []).length) items.push(li("Pseudonymised: " + r.pseudonymised.join(", ")));
+    if ((r.generalised || []).length) items.push(li("Reduced to year: " + r.generalised.map((x) => x.column).join(", ")));
+    if (r.duplicates_removed) items.push(li(r.duplicates_removed + " duplicate rows removed"));
+    if (r.empty_rows_removed) items.push(li(r.empty_rows_removed + " empty rows removed"));
+    const cm = Object.entries(r.coerced_to_missing || {});
+    if (cm.length) items.push(li("Unreadable values set to missing: " + cm.map(([c, n]) => c + " (" + n + ")").join(", ")));
+    if (k.k_min != null) items.push(li("Smallest group sharing " + k.columns.join(" + ") + ": " + k.k_min + " (" + k.rows_in_small_groups + " rows in groups under 5)"));
+    return h("div", null, h("ul", { class: "plain" }, items), (r.warnings || []).map((w) => h("div", { class: "notice" }, w)));
+  }
+
+  function uploadWizard(d) {
+    const root = h("details", { class: "card" }, h("summary", null, "Upload a new version"));
+    const body = h("div"); root.append(body);
+    const err = h("p", { class: "error", role: "alert" });
+    const file = h("input", { id: "uf", type: "file", accept: ".csv,.xlsx" });
+    const analyse = h("button", { class: "primary", onclick: async () => {
+      err.textContent = "";
+      const f = file.files[0]; if (!f) { err.textContent = "Choose a .csv or .xlsx file first."; return; }
+      const fd = new FormData(); fd.append("file", f);
+      analyse.disabled = true; analyse.textContent = "Analysing…";
+      try { review(f, await api("/v1/datasets/inspect", { method: "POST", body: fd })); }
+      catch (e) { err.textContent = e.message; }
+      finally { analyse.disabled = false; analyse.textContent = "Analyse file"; }
+    } }, "Analyse file");
+    body.append(h("p", null, "Step 1: choose a CSV or Excel file (first sheet is used). The file is analysed, nothing is stored yet."), field("File", file, "uf"), analyse, err);
+
+    function review(f, a) {
+      const sel = {}, why = {};
+      const rowsEls = a.columns.map((c) => {
+        const opts = [];
+        if (c.can_keep) opts.push("keep");
+        opts.push("drop");
+        if (a.pseudonymisation_available && c.kind !== "date" && c.kind !== "text") opts.push("pseudonymise");
+        if (c.kind === "date") opts.push("year_only");
+        const s = h("select", { "aria-label": "Action for " + c.name }, opts.map((o) => h("option", { value: o, selected: o === c.suggested }, o.replace("_", " "))));
+        const r = h("input", { placeholder: "Reason for keeping (10+ characters)", maxlength: 300, hidden: true, "aria-label": "Reason for keeping " + c.name });
+        const sync = () => { r.hidden = !(s.value === "keep" && c.category !== "none"); };
+        s.addEventListener("change", sync); sync();
+        sel[c.name] = s; why[c.name] = r;
+        return [c.name, c.kind, c.category === "none" ? (c.reason || "—") : h("span", { class: "badge bad" }, c.category.replace("_", " ")),
+          h("div", null, s, r), h("span", { class: "muted" }, c.profile.hidden ? "hidden" : (c.profile.missing_pct ?? 0) + "% missing")];
+      });
+      const appr = h("input", { id: "ap", maxlength: 300, placeholder: "e.g. COMREC P.05/26/1234 or data-sharing agreement ref" });
+      const dd = h("input", { id: "dd2", type: "checkbox", checked: true });
+      const err2 = h("p", { class: "error", role: "alert" });
+      const go = h("button", { class: "primary", onclick: async () => {
+        err2.textContent = "";
+        const plan = { drop_duplicates: dd.checked, columns: a.columns.map((c) => ({ name: c.name, action: sel[c.name].value, override_reason: sel[c.name].value === "keep" && c.category !== "none" ? why[c.name].value.trim() : null })) };
+        const fd = new FormData(); fd.append("file", f); fd.append("plan", JSON.stringify(plan)); fd.append("approval_ref", appr.value.trim());
+        go.disabled = true;
+        try { await api("/v1/datasets/" + d.id + "/versions", { method: "POST", body: fd }); location.hash = "datasets/" + d.id; show("datasets/" + d.id); }
+        catch (e) { err2.textContent = e.message; go.disabled = false; }
+      } }, "Create version");
+      const notes = [];
+      if (a.warnings.length) notes.push(a.warnings.map((w) => h("div", { class: "notice" }, w)));
+      const da = Object.entries(a.date_assumptions);
+      if (da.length) notes.push(h("p", { class: "muted" }, "Date formats read as: " + da.map(([c, m]) => c + " (" + m + ")").join(", ") + "."));
+      body.replaceChildren(
+        h("p", null, a.rows.toLocaleString() + " rows, " + a.columns.length + " columns. Step 2: review each column. Flagged columns are dropped by default and their values are not shown."),
+        notes, table(["Column", "Type", "Finding", "Action", "Quality"], rowsEls),
+        h("div", { class: "form3" }, field("Approval reference (required)", appr, "ap"),
+          h("div", null, h("label", { for: "dd2" }, "Remove duplicate rows"), dd)),
+        h("p", { class: "muted" }, "Missing values are left as they are. Imputation and encoding are done inside training so they never leak across folds."),
+        go, err2);
+    }
+    return root;
   }
 
   async function audit() {
@@ -113,11 +248,12 @@
   }
 
   async function show(id) {
-    const page = PAGES.find((p) => p.id === id) || PAGES[0];
+    const [pid, arg] = String(id || "").split("/");
+    const page = PAGES.find((p) => p.id === pid) || PAGES[0];
     document.querySelectorAll("#nav button").forEach((b) => { if (b.dataset.id === page.id) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current"); });
     const view = $("view");
     view.replaceChildren(h("p", null, "Loading…"));
-    try { view.replaceChildren(...[].concat(await page.render()).flat().filter(Boolean)); }
+    try { view.replaceChildren(...[].concat(await page.render(arg)).flat().filter(Boolean)); }
     catch (e) { view.replaceChildren(h("h1", null, page.label), h("div", { class: "notice" }, e.message)); }
     view.focus({ preventScroll: true });
   }
