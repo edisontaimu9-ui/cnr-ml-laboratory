@@ -143,3 +143,15 @@ def test_audit_has_no_row_content(client):
 
 def test_duplicate_dataset_name(client, ds):
     assert client.post("/v1/datasets", json={"name": "pilot"}, headers=ADMIN).status_code == 409
+
+
+def test_unhandled_error_returns_json_with_cors(client, monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError("disk full")
+    monkeypatch.setattr(storage, "save", boom)
+    c = TestClient(app, raise_server_exceptions=False)
+    d = c.post("/v1/datasets", json={"name": "boom-ds"}, headers=ADMIN).json()
+    r = c.post(f"/v1/datasets/{d['id']}/versions", headers={**ADMIN, "Origin": "http://localhost:8080"},
+               files={"file": ("d.csv", "a,b\n1,2\n3,4\n5,6\n")}, data={"approval_ref": "TEST-001"})
+    assert r.status_code == 500 and "Server error" in r.json()["detail"]
+    assert r.headers.get("access-control-allow-origin") == "http://localhost:8080"

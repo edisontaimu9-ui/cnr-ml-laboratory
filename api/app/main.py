@@ -2,6 +2,7 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select
 
@@ -61,7 +62,17 @@ app.add_middleware(
 
 @app.middleware("http")
 async def security_headers(request, call_next):
-    resp = await call_next(request)
+    try:
+        resp = await call_next(request)
+    except Exception:
+        # Unhandled errors bypass CORSMiddleware, which browsers report as "cannot reach the API".
+        # Log the real cause and return a JSON error that the dashboard can display.
+        log.exception("Unhandled error on %s %s", request.method, request.url.path)
+        resp = JSONResponse({"detail": "Server error. Check the service logs."}, status_code=500)
+        origin = request.headers.get("origin")
+        if origin and origin in settings.cors_list:
+            resp.headers["Access-Control-Allow-Origin"] = origin
+            resp.headers["Vary"] = "Origin"
     resp.headers["X-Content-Type-Options"] = "nosniff"
     resp.headers["Cache-Control"] = "no-store"
     return resp
