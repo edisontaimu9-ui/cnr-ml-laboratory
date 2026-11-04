@@ -203,7 +203,7 @@
       if (da.length) notes.push(h("p", { class: "muted" }, "Date formats read as: " + da.map(([c, m]) => c + " (" + m + ")").join(", ") + "."));
       body.replaceChildren(
         h("p", null, a.rows.toLocaleString() + " rows, " + a.columns.length + " columns. Step 2: review each column. Flagged columns are dropped by default and their values are not shown."),
-        notes, table(["Column", "Type", "Finding", "Action", "Quality"], rowsEls),
+        ...notes.flat(), table(["Column", "Type", "Finding", "Action", "Quality"], rowsEls),
         h("div", { class: "form3" }, field("Approval reference (required)", appr, "ap"),
           h("div", null, h("label", { for: "dd2" }, "Remove duplicate rows"), dd)),
         h("p", { class: "muted" }, "Missing values are left as they are. Imputation and encoding are done inside training so they never leak across folds."),
