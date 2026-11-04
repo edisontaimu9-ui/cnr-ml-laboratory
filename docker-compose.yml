@@ -1,0 +1,13 @@
+# Local reproducible stack: API on :8000, dashboard on :8080 (SQLite by default).
+services:
+  api:
+    build: ./api
+    env_file: .env
+    ports: ["8000:8000"]
+    volumes: ["mlab-data:/srv/data"]
+  dashboard:
+    build: ./dashboard
+    ports: ["8080:80"]
+    depends_on: [api]
+volumes:
+  mlab-data:
