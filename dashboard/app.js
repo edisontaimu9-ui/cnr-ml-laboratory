@@ -26,7 +26,13 @@
       res = await fetch(API + path, { ...opts, headers });
     } catch { throw new Error("Cannot reach the ML API. Check your connection and try again."); }
     if (res.status === 401) { signOut(); throw new Error("Your key was not accepted."); }
-    if (!res.ok) { const b = await res.json().catch(() => ({})); throw new Error(b.detail || "Request failed (" + res.status + ")."); }
+    if (!res.ok) {
+      const b = await res.json().catch(() => ({}));
+      let d = b.detail;
+      // FastAPI sends validation problems as a list of objects; turn them into readable text.
+      if (Array.isArray(d)) d = d.map((e) => ((e.loc || []).slice(1).join(" ") || "input") + ": " + (e.msg || "invalid")).join("; ");
+      throw new Error(d || "Request failed (" + res.status + ").");
+    }
     return res.status === 204 ? null : res.json();
   }
 
