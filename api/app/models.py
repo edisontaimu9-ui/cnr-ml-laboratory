@@ -89,6 +89,8 @@ class Experiment(Base):
 
 
 class ModelVersion(Base):
+    """A registered, immutable copy of a trained model plus its review trail.
+    Status: candidate -> in_review -> approved | rejected; approved -> deployed -> retired."""
     __tablename__ = "mlab_model_versions"
     __table_args__ = (UniqueConstraint("model_definition_id", "version"),)
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -100,6 +102,26 @@ class ModelVersion(Base):
     approved_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
     clinical_validation_ref: Mapped[str | None] = mapped_column(String(500), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    # Phase 4: registry
+    dataset_version_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    artifact_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    artifact_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    metrics_json: Mapped[dict] = mapped_column(JSON, default=dict)      # frozen copy of the evaluation
+    intended_use: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    created_by_key_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    submitted_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    submitted_by_key_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    reviewed_by_key_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    review_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    warnings_acknowledged: Mapped[bool] = mapped_column(Boolean, default=False)
+    deployed_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    deployed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    retired_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    retired_reason: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    history_json: Mapped[list] = mapped_column(JSON, default=list)
 
 
 class AuditLog(Base):

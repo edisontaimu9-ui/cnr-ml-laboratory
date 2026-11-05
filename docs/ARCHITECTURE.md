@@ -24,6 +24,15 @@ Model artifacts and datasets are **not** stored in Postgres or git. Phase 2 stor
 - The fitted pipeline is stored with `joblib` under `DATASET_STORAGE_DIR/experiments/` and never exposed over the API. Phase 4 will register approved artifacts; only load files this service wrote itself.
 - A completed experiment does not make a model available. Availability still requires the review and sign-off added in Phases 4 and 5.
 
+## Registry and review gate (Phase 4)
+- **Register** (`write:models`): only a `completed` experiment whose model file still exists, once. The file is copied to `models/<slug>/v<n>.joblib` under the private storage directory (immutable from then on) and its SHA-256 and size are recorded. The evaluation (`metrics_json`) is copied into the version so later edits or re-runs cannot change what was reviewed. Storage paths are never returned by the API. The registry never loads a model file; it only reads bytes.
+- **States:** `candidate → in_review → approved | rejected`; `approved → deployed → retired`. Every other transition is refused with 409. `rejected` is final.
+- **Approve** (`approve:models`): `clinical_validation_ref` (evidence reference, 5+ chars) and review notes (20+ chars) are mandatory. If the frozen evaluation holds warnings (small data, baseline not beaten, suspiciously strong result) the reviewer must set `acknowledge_warnings`. With `REQUIRE_SEPARATE_REVIEWER=true` (default) the reviewing key must differ from the key that registered and the key that submitted.
+- **Deploy** (`deploy:models`, admin): from `approved` or from `retired` with reason *superseded*. Re-verifies the stored file against its recorded hash, retires the current deployed version of the same model (*superseded*) and records who and when. **Rollback** re-deploys the most recent superseded version and retires the current one as *rolled back*; a rolled-back or withdrawn version can never be redeployed. **Retire** withdraws a version with a written reason.
+- **Catalogue status** is derived: `deployed` if any version is deployed, else `approved` if any is approved, else `in_development`.
+- **"Deployed" is a designation, not serving.** Phase 5 adds prediction endpoints that may load only the deployed version, after re-checking its hash.
+- Additive columns are added to `mlab_model_versions` automatically at start-up; no manual SQL migration is needed.
+
 ## Dataset ingestion (Phase 2)
 1. **Inspect** (`/v1/datasets/inspect`): the file is parsed in memory, typed, scanned for identifiers and profiled. Nothing is stored. Values of flagged columns are never returned.
 2. **Create version** (`/v1/datasets/{id}/versions`): the file is parsed again, the reviewed plan is applied, and only the resulting table is stored. The raw upload is discarded. Re-uploading an identical file is rejected.
@@ -36,7 +45,7 @@ Model artifacts and datasets are **not** stored in Postgres or git. Phase 2 stor
 - Denied requests, key changes and (from Phase 2) uploads, training runs and predictions are written to the audit log. Secrets and request bodies are never logged.
 - `/docs` and `/openapi.json` are disabled when `ENVIRONMENT=production`. CORS is restricted to the dashboard origin.
 - Phase 2 adds `read:dataset_rows` (data_scientist and admin only) for row previews; viewers see only metadata. Audit detail for uploads holds counts, hashes and the approval reference, never rows, file names or cell values.
-- Known limits: no rate limiting yet, and the dashboard keeps the key in `sessionStorage` (cleared on tab close). Rate limiting and per-user login are candidates for Phase 4.
+- Known limits: no rate limiting yet, and the dashboard keeps the key in `sessionStorage` (cleared on tab close). Rate limiting and per-user login remain open and are candidates for Phase 5, before any prediction endpoint is exposed.
 
-## Deployment gate (enforced from Phase 4)
+## Deployment gate (enforced since Phase 4)
 Candidate → clinical review (external validation evidence recorded) → approved → deployed, with rollback to the previous approved version. Human oversight remains mandatory for any clinical decision.

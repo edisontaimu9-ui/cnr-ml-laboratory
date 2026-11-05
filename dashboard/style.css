@@ -14,7 +14,7 @@ button.primary{background:var(--lake);border-color:var(--lake);color:#fff;font-w
 button.link{border:0;background:none;color:var(--lake);padding:0;text-decoration:underline}
 button.danger{color:var(--bad);border-color:var(--bad)}
 :focus-visible{outline:3px solid var(--maize);outline-offset:2px}
-input,select{font:inherit;width:100%;padding:.55rem .7rem;border:1px solid var(--line);border-radius:6px;background:#fff;color:var(--ink)}
+input,select,textarea{font:inherit;width:100%;padding:.55rem .7rem;border:1px solid var(--line);border-radius:6px;background:#fff;color:var(--ink)}
 label{display:block;font-weight:600;margin:.8rem 0 .3rem}
 .error{color:var(--bad);min-height:1.4em}
 
@@ -68,7 +68,7 @@ details>summary{margin-bottom:.5rem}
 ul.plain{margin:.4rem 0;padding-left:1.1rem}
 .muted{color:var(--muted)}
 td select,td input{min-width:9rem}
-td input[type=checkbox]{width:auto}
+td input[type=checkbox],input[type=checkbox]{width:auto}
 td>div{display:flex;flex-direction:column;gap:.3rem}
 .checks{display:flex;flex-wrap:wrap;gap:.3rem .9rem;margin:.3rem 0 1rem}
 label.chk{display:inline-flex;gap:.3rem;align-items:center;font-weight:400;margin:0}

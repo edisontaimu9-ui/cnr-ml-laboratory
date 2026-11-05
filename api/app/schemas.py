@@ -111,10 +111,61 @@ class ExperimentCreate(BaseModel):
 class ModelVersionOut(ORM):
     id: int
     model_definition_id: int
+    model_slug: str | None = None
+    model_name: str | None = None
     version: int
     status: str
-    approved_by: str | None
+    experiment_id: int | None = None
+    dataset_version_id: int | None = None
+    headline: dict[str, Any] = {}
+    created_by: str | None = None
     created_at: UTC
+    submitted_at: UTC = None
+    reviewed_at: UTC = None
+    deployed_at: UTC = None
+    approved_by: str | None = None
+
+
+class ModelVersionDetail(ModelVersionOut):
+    intended_use: str | None = None
+    clinical_validation_ref: str | None = None
+    review_notes: str | None = None
+    warnings_acknowledged: bool = False
+    submitted_by: str | None = None
+    deployed_by: str | None = None
+    retired_at: UTC = None
+    retired_reason: str | None = None
+    artifact_sha256: str | None = None
+    artifact_bytes: int | None = None
+    metrics_json: dict[str, Any] = {}
+    history: list[dict[str, Any]] = []
+
+
+class RegisterVersion(BaseModel):
+    experiment_id: int
+    intended_use: str = Field(min_length=20, max_length=2000)
+
+
+class SubmitVersion(BaseModel):
+    note: str = Field(default="", max_length=1000)
+
+
+class ApproveVersion(BaseModel):
+    clinical_validation_ref: str = Field(min_length=5, max_length=500)
+    review_notes: str = Field(min_length=20, max_length=3000)
+    acknowledge_warnings: bool = False
+
+
+class RejectVersion(BaseModel):
+    review_notes: str = Field(min_length=10, max_length=3000)
+
+
+class DeployVersion(BaseModel):
+    note: str = Field(default="", max_length=1000)
+
+
+class RetireVersion(BaseModel):
+    reason: str = Field(min_length=10, max_length=300)
 
 
 class AuditOut(ORM):

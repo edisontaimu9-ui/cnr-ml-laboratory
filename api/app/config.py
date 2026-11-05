@@ -11,13 +11,15 @@ class Settings(BaseSettings):
     bootstrap_admin_key: str = ""
     cors_origins: str = "http://localhost:8080"
     cnr_api_base_url: str = ""
-    service_version: str = "0.3.0"
+    service_version: str = "0.4.0"
     # Phase 2: dataset ingestion
     dataset_storage_dir: str = "./data/datasets"
     pseudonym_key: str = ""          # >= 32 chars; enables the "pseudonymise" action
     max_upload_mb: int = 20
     max_rows: int = 200_000
     max_columns: int = 300
+    # Phase 4: governance. A model must be reviewed by a different key than the one that registered/submitted it.
+    require_separate_reviewer: bool = True
 
     @property
     def cors_list(self) -> list[str]:

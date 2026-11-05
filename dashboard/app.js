@@ -34,6 +34,7 @@
     { id: "overview", label: "Overview", perm: null, render: overview },
     { id: "models", label: "Models", perm: "read:catalog", render: models },
     { id: "experiments", label: "Experiments", perm: "read:experiments", render: experiments },
+    { id: "registry", label: "Registry", perm: "read:models", render: registry },
     { id: "datasets", label: "Datasets", perm: "read:datasets", render: datasets },
     { id: "audit", label: "Audit log", perm: "read:audit", render: audit },
     { id: "access", label: "Access", perm: "manage:keys", render: access },
@@ -59,12 +60,13 @@
   }
 
   async function models() {
-    const list = await api("/v1/catalog");
+    const [list, vers] = await Promise.all([api("/v1/catalog"), api("/v1/models/versions?limit=200")]);
+    const live = (slug) => vers.filter((v) => v.model_slug === slug && (v.status === "deployed" || v.status === "approved")).map((v) => "v" + v.version + " " + v.status).join(", ");
     return [h("h1", null, "Models"),
       h("p", null, "These are the prediction targets the laboratory is designed to support. A model becomes available only after evaluation, external validation and clinical-reviewer approval."),
       list.map((m) => h("div", { class: "card" },
         h("div", { class: "row" }, h("h3", null, m.name), h("span", { class: "badge " + m.status }, m.status)),
-        h("p", null, m.description), h("small", null, "Task: " + m.task_type)))];
+        h("p", null, m.description), h("small", null, "Task: " + m.task_type + (live(m.slug) ? " · " + live(m.slug) : ""))))];
   }
 
   let poll = null;
@@ -152,6 +154,7 @@
     }
     if (e.status === "failed") { out.push(h("div", { class: "notice" }, m.error || "The run failed.")); return out; }
     const t = m.test || {}, b = m.baseline || {}, cv = m.cv || {};
+    if (can("write:models")) out.push(registerBox(e));
     (m.warnings || []).forEach((w) => out.push(h("div", { class: "notice" }, w)));
     const stat = (l, v, sub) => h("div", { class: "stat" }, h("b", null, v), h("span", null, l + (sub ? " · " + sub : "")));
     if (m.task === "classification") {
@@ -176,6 +179,107 @@
     out.push(h("h2", null, "Limits of this result"), h("ul", { class: "plain" }, (m.limitations || []).map((x) => h("li", null, x))),
       h("p", { class: "muted" }, "Features used: " + [...(m.features.numeric || []), ...(m.features.categorical || [])].join(", ") + "."));
     return out;
+  }
+
+
+  const VSTATUS = { candidate: "planned", in_review: "planned", approved: "", deployed: "", rejected: "bad", retired: "planned" };
+  const vBadge = (st) => h("span", { class: "badge " + (VSTATUS[st] ?? "planned") }, st.replace("_", " "));
+
+  function registerBox(e) {
+    const use = h("textarea", { id: "ru", rows: 3, maxlength: 2000, placeholder: "Intended use and setting, e.g. screening support for children under five at district clinics. Not a diagnosis." });
+    const err = h("p", { class: "error", role: "alert" });
+    const go = h("button", { class: "primary", onclick: async () => {
+      err.textContent = "";
+      if (use.value.trim().length < 20) { err.textContent = "Describe the intended use in at least 20 characters."; return; }
+      go.disabled = true;
+      try { const v = await api("/v1/models/versions", { method: "POST", body: JSON.stringify({ experiment_id: e.id, intended_use: use.value.trim() }) }); location.hash = "registry/" + v.id; }
+      catch (x) { err.textContent = x.message; go.disabled = false; }
+    } }, "Register as model version");
+    return h("details", { class: "card" }, h("summary", null, "Register this run in the model registry"),
+      h("p", { class: "muted" }, "Registering saves a frozen copy of the model and its results. It does not make the model available. It must still be submitted, reviewed and approved by a different person."),
+      field("Intended use", use, "ru"), go, err);
+  }
+
+  async function registry(arg) {
+    if (arg) return versionDetail(Number(arg));
+    const rows = await api("/v1/models/versions?limit=200");
+    return [h("h1", null, "Model registry"),
+      h("div", { class: "notice" }, "A version moves from candidate to in review to approved, and only then can an administrator deploy it. Deploying marks the version to be served; no predictions are served until Phase 5."),
+      rows.length ? table(["Model", "Version", "Status", "Result vs baseline", "Registered by", "Registered", ""], rows.map((v) => [v.model_name || v.model_slug, "v" + v.version, vBadge(v.status),
+        v.headline.test != null ? v.headline.metric + " " + n3(v.headline.test) + " vs " + n3(v.headline.baseline) + (v.headline.warnings ? " · " + v.headline.warnings + " warning(s)" : "") : "—",
+        v.created_by || "—", fmt(v.created_at), h("button", { class: "link", onclick: () => { location.hash = "registry/" + v.id; } }, "Open")]))
+        : empty("No registered models", can("write:models") ? "Open a completed experiment and register it to start the review process." : "A data scientist can register a completed experiment.")];
+  }
+
+  async function versionDetail(id) {
+    const v = await api("/v1/models/versions/" + id);
+    const m = v.metrics_json || {}, t = m.test || {}, b = m.baseline || {};
+    const back = () => { location.hash = "registry"; };
+    const reload = () => show("registry/" + id);
+    const run = (label, path, body, ask, cls) => h("button", { class: cls || "primary", onclick: async (ev) => {
+      if (ask && !confirm(ask)) return;
+      ev.target.disabled = true;
+      try { await api(path, { method: "POST", body: JSON.stringify(body || {}) }); reload(); } catch (e) { alert(e.message); ev.target.disabled = false; }
+    } }, label);
+    const out = [h("p", null, h("button", { class: "link", onclick: back }, "← Registry")),
+      h("div", { class: "row" }, h("h1", null, (v.model_name || v.model_slug) + " · v" + v.version), vBadge(v.status)),
+      h("p", { class: "muted" }, "Experiment #" + v.experiment_id + " · registered by " + (v.created_by || "—") + " on " + fmt(v.created_at) + (v.artifact_sha256 ? " · file SHA-256 " + v.artifact_sha256.slice(0, 12) + "…" : "")),
+      h("div", { class: "notice" }, "Intended use: " + (v.intended_use || "—") + " Outputs are risk estimates to support clinical judgement, never confirmed diagnoses.")];
+    (m.warnings || []).forEach((w) => out.push(h("div", { class: "notice" }, w)));
+    const stat = (l, x, sub) => h("div", { class: "stat" }, h("b", null, x), h("span", null, l + (sub ? " · " + sub : "")));
+    out.push(h("h2", null, "Evaluation (frozen at registration)"));
+    out.push(h("div", { class: "stats" }, m.task === "classification"
+      ? [stat("Macro F1", n3(t.macro_f1), "95% range " + n3(t.macro_f1_ci95 && t.macro_f1_ci95[0]) + "–" + n3(t.macro_f1_ci95 && t.macro_f1_ci95[1])), stat("Baseline macro F1", n3(b.macro_f1)), stat("Balanced accuracy", pct(t.balanced_accuracy)), stat("Test rows", m.n_test)]
+      : [stat("R²", n3(t.r2), "baseline " + n3(b.r2)), stat("RMSE", n3(t.rmse)), stat("Test rows", m.n_test)]));
+    out.push(h("p", null, h("button", { class: "link", onclick: () => { location.hash = "experiments/" + v.experiment_id; } }, "Open the full experiment report")));
+
+    // actions
+    const act = [];
+    if (v.status === "candidate" && can("write:models")) act.push(h("p", null, run("Submit for clinical review", "/v1/models/versions/" + id + "/submit", {}, "Submit this version for clinical review?")));
+    if (v.status === "in_review" && can("approve:models")) act.push(reviewForm(v, reload));
+    if (v.status === "in_review" && !can("approve:models")) act.push(h("div", { class: "notice" }, "Waiting for a clinical reviewer."));
+    if ((v.status === "approved" || (v.status === "retired" && (v.retired_reason || "") === "superseded")) && can("deploy:models"))
+      act.push(h("p", null, run("Deploy this version", "/v1/models/versions/" + id + "/deploy", {}, "Mark v" + v.version + " as the version to serve? The current one will be retired.")));
+    if (v.status === "deployed" && can("deploy:models")) act.push(h("p", { class: "inline" },
+      run("Roll back to previous version", "/v1/models/" + v.model_slug + "/rollback", {}, "Roll back? This version will be retired and cannot be redeployed.", "danger"),
+      retireButton(v, reload)));
+    if (v.status === "approved" && can("deploy:models")) act.push(retireButton(v, reload));
+    if (act.length) out.push(h("h2", null, "Actions"), ...act);
+
+    if (v.status !== "candidate" && v.status !== "in_review") out.push(h("h2", null, "Review"),
+      h("p", null, (v.approved_by ? "Approved by " + v.approved_by + " on " + fmt(v.reviewed_at) : "Decision recorded " + fmt(v.reviewed_at)) + (v.clinical_validation_ref ? " · evidence: " + v.clinical_validation_ref : "")),
+      h("p", null, v.review_notes || ""), v.warnings_acknowledged ? h("small", null, "The reviewer acknowledged the evaluation warnings.") : null,
+      v.retired_reason ? h("p", { class: "muted" }, "Retired: " + v.retired_reason) : null);
+    out.push(h("h2", null, "History"), table(["When", "Who", "What", "Note"], (v.history || []).map((x) => [fmt(x.ts), x.by, x.action, x.note || ""])));
+    return out;
+  }
+
+  function retireButton(v, reload) {
+    return h("button", { class: "danger", onclick: async (ev) => {
+      const why = prompt("Why is this version being withdrawn? (10+ characters)");
+      if (!why) return;
+      try { await api("/v1/models/versions/" + v.id + "/retire", { method: "POST", body: JSON.stringify({ reason: why.trim() }) }); reload(); } catch (e) { alert(e.message); }
+    } }, "Withdraw this version");
+  }
+
+  function reviewForm(v, reload) {
+    const ref = h("input", { id: "rv", maxlength: 500, placeholder: "e.g. COMREC-2026-017 external validation report" });
+    const notes = h("textarea", { id: "rn", rows: 3, maxlength: 3000, placeholder: "What you checked: per-class results, features used, limits, whether the setting matches the intended use." });
+    const ack = h("input", { id: "ra", type: "checkbox" });
+    const err = h("p", { class: "error", role: "alert" });
+    const send = (path, body) => async (ev) => {
+      err.textContent = ""; ev.target.disabled = true;
+      try { await api("/v1/models/versions/" + v.id + path, { method: "POST", body: JSON.stringify(body()) }); reload(); }
+      catch (e) { err.textContent = e.message; ev.target.disabled = false; }
+    };
+    const warn = (v.headline && v.headline.warnings) || 0;
+    return h("div", { class: "card" }, h("h3", null, "Clinical review"),
+      h("p", { class: "muted" }, "You must be a different person from the one who registered or submitted this version. Approval needs a reference to the external validation evidence."),
+      field("Validation evidence reference", ref, "rv"), field("Review notes", notes, "rn"),
+      warn ? h("div", null, h("label", { for: "ra" }, "I have read the " + warn + " evaluation warning(s) above and considered them"), ack) : null,
+      h("div", { class: "inline" },
+        h("button", { class: "primary", onclick: send("/approve", () => ({ clinical_validation_ref: ref.value.trim(), review_notes: notes.value.trim(), acknowledge_warnings: ack.checked })) }, "Approve"),
+        h("button", { class: "danger", onclick: send("/reject", () => ({ review_notes: notes.value.trim() })) }, "Reject")), err);
   }
 
   const can = (perm) => me && me.permissions.includes(perm);
