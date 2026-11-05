@@ -328,3 +328,49 @@ def test_logistic_experiment_can_be_registered(client, ds):
     assert r.status_code == 201, r.text
     v = client.get(f"/v1/models/versions/{r.json()['id']}", headers=ADMIN).json()
     assert v["metrics_json"]["algorithm"] == "logistic" and v["metrics_json"]["coefficients"]["outcomes"] and v["artifact_sha256"]
+
+
+def test_logistic_prediction_explains_itself_without_echoing_values(client, ds):
+    import io
+
+    import joblib
+
+    from app import serving
+    m = train(client, ds, **LR)["metrics_json"]
+    bundle = joblib.load(io.BytesIO(storage.load_bytes(m["artifact_uri"])))
+    out = serving.predict(bundle, [{"age": 20, "weight": 6.0, "district": "Zomba"}, {"age": 30}, {"age": 20, "weight": 9.1, "district": "Unknownville"}])
+    ex = out[0]["explanation"]
+    assert ex["toward"] == out[0]["predicted_class"] and 1 <= len(ex["drivers"]) <= 5 and ex["not_given"] == []
+    sizes = [abs(d["effect"]) for d in ex["drivers"]]
+    assert sizes == sorted(sizes, reverse=True) and all(d["direction"] in ("raises", "lowers") for d in ex["drivers"])
+    assert "6.0" not in str(ex) and "Zomba" not in str(ex)
+    assert set(out[1]["explanation"]["not_given"]) == {"weight", "district"}
+    assert all(d["feature"] == "age" for d in out[1]["explanation"]["drivers"])
+    assert out[2]["explanation"]["note"]
+
+
+def test_binary_explanation_direction_matches_coefficient_sign(client):
+    import io
+
+    import joblib
+    import pandas as pd
+
+    from app import serving, training
+    rng = np.random.default_rng(3)
+    df = pd.DataFrame({"weight": rng.normal(10, 2, 300)})
+    df["flag"] = np.where(df.weight + rng.normal(0, 1, 300) < 9.5, "yes", "no")
+    _, bundle = training.run(df, training.Config(target="flag", task="classification", algorithm="logistic", balance_classes=False, compare_xgboost=False))
+    low, high = serving.predict(bundle, [{"weight": 6.0}, {"weight": 14.0}])
+    assert low["predicted_class"] == "yes" and low["explanation"]["drivers"][0]["direction"] == "raises"
+    assert high["predicted_class"] == "no" and high["explanation"]["drivers"][0]["direction"] == "raises"   # towards "no"
+
+
+def test_other_models_have_no_explanation(client, ds):
+    import io
+
+    import joblib
+
+    from app import serving
+    m = train(client, ds)["metrics_json"]
+    bundle = joblib.load(io.BytesIO(storage.load_bytes(m["artifact_uri"])))
+    assert "explanation" not in serving.predict(bundle, [{"age": 20, "weight": 9.1, "district": "Zomba"}])[0]

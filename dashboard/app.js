@@ -502,6 +502,13 @@
     } else {
       out.push(h("h2", null, "Estimated value: " + r.predicted_value), h("p", { class: "muted" }, "A model estimate, not a diagnosis." + (b.model.evaluation.rmse != null ? " Typical error on test data (RMSE): " + n3(b.model.evaluation.rmse) + "." : "")));
     }
+    const ex = r.explanation;
+    if (ex) {
+      out.push(h("h2", null, "Why this estimate"),
+        ex.drivers.length ? h("ul", { class: "plain" }, ex.drivers.map((d) => h("li", null, d.feature + " " + d.direction + " the estimate for " + ex.toward + " (" + (d.effect > 0 ? "+" : "") + d.effect + " log-odds)"))) : h("p", { class: "muted" }, "No single feature stood out."),
+        ex.not_given.length ? h("p", { class: "muted" }, "Not entered, so not scored: " + ex.not_given.join(", ") + ".") : null,
+        h("p", { class: "muted" }, ex.note));
+    }
     out.push(h("ul", { class: "plain" }, b.caveats.map((c) => h("li", null, c))),
       h("small", null, "Request " + b.request_id + " · " + b.model.name + " v" + b.model.version + " · " + fmt(b.generated_at) + ". Inputs are not stored."));
     return out;

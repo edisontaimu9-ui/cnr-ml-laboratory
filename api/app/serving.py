@@ -18,6 +18,7 @@ import hashlib
 
 from . import storage
 from .models import ModelDefinition, ModelVersion
+from .training import _lr_base, _split_name
 
 
 class ServingError(Exception):
@@ -30,6 +31,9 @@ _cache: dict[str, tuple[int, str, dict]] = {}
 _lock = threading.Lock()
 MAX_TEXT = 100
 MISSING_WARN = 0.5
+MAX_DRIVERS = 5
+EXPLAIN_NOTE = ("These are the features that pushed this estimate up or down, from the model's coefficients. They describe the model, "
+                "not the cause of the condition, and the calibrated probability can differ slightly from what they imply alone.")
 
 
 def deployed(db: Session, slug: str) -> tuple[ModelDefinition, ModelVersion | None]:
@@ -126,6 +130,41 @@ def _frame(bundle: dict, records: list[dict[str, Any]]) -> tuple[pd.DataFrame, l
     return df, notes, miss
 
 
+def _explain(bundle: dict, X: pd.DataFrame, proba: np.ndarray) -> list[dict] | None:
+    """Per-case drivers for a logistic regression model: each feature's share of the log-odds towards the predicted class
+    (value x coefficient on the standardised inputs, summed over a column's category levels). Returns None for other models.
+    Features the caller left out are listed as not given, not scored, because their value was filled in. Raw input values
+    are never echoed back."""
+    try:
+        base = _lr_base(bundle["pipeline"])
+        if not hasattr(base, "coef_"):
+            return None
+    except Exception:
+        return None
+    pre, classes, cat = bundle["pipeline"].named_steps["pre"], bundle["classes"], bundle["categorical"]
+    Z = np.asarray(pre.transform(X), dtype=float)
+    names = pre.get_feature_names_out()
+    coef = base.coef_
+    out = []
+    for i in range(len(X)):
+        c = int(np.argmax(proba[i]))
+        if len(classes) == 2:
+            w = coef[0] if c == 1 else -coef[0]
+        else:
+            w = coef[c] - coef.mean(axis=0)         # softmax ignores a shift shared by all classes
+        agg: dict[str, float] = {}
+        for name, z, wj in zip(names, Z[i], w):
+            f = _split_name(name, cat)[0]
+            agg[f] = agg.get(f, 0.0) + float(z * wj)
+        given = {f: v for f, v in agg.items() if not pd.isna(X.iloc[i][f])}
+        drivers = sorted(given.items(), key=lambda kv: -abs(kv[1]))[:MAX_DRIVERS]
+        out.append({"method": "logistic regression coefficients", "toward": classes[c],
+                    "drivers": [{"feature": f, "effect": round(v, 3), "direction": "raises" if v > 0 else "lowers"}
+                                for f, v in drivers if abs(v) >= 0.005],
+                    "not_given": [f for f in agg if f not in given], "note": EXPLAIN_NOTE})
+    return out
+
+
 def predict(bundle: dict, records: list[dict[str, Any]]) -> list[dict]:
     X, notes, miss = _frame(bundle, records)
     pipe = bundle["pipeline"]
@@ -141,6 +180,9 @@ def predict(bundle: dict, records: list[dict[str, Any]]) -> list[dict]:
                         "risk_indicators": {"top_probability": round(top, 4), "margin_to_next": round(top - second, 4),
                                             "missing_fraction": mf, "low_confidence": bool(low)},
                         "notes": rn})
+        for o, ex in zip(out, _explain(bundle, X, proba) or [None] * len(out)):
+            if ex:
+                o["explanation"] = ex
     else:
         for v, rn, mf in zip(pipe.predict(X), notes, miss):
             out.append({"kind": "risk_estimate", "predicted_value": round(float(v), 4),
