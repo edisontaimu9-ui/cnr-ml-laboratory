@@ -40,7 +40,17 @@ Model artifacts and datasets are **not** stored in Postgres or git. Phase 2 stor
 - **Output contract:** never a diagnosis. `kind: risk_estimate`, `decision_support_only: true`, the safety notice, model/version/approval reference, caveats (including that the model was approved with warnings, if so) and a request ID. Class scores are not calibrated probabilities and the dashboard says so.
 - **Privacy:** request bodies and results are not stored or logged. Audit detail: model, version, record count, low-confidence count, request ID.
 - **Limits:** per-key prediction limit and a per-address wrong-key counter, both in process memory (fine for one instance; use shared storage if scaled out). The wrong-key limiter protects the audit log and database from flooding; the keys themselves are 256-bit random values.
-- **Role `service`** is the machine identity for Phase 6.
+- **Role `service`** is the machine identity used by the CNR integration (Phase 6).
+
+## CNR integration (Phase 6)
+- **Direction and trust.** CNR is the caller. It holds a `service` key (read catalogue, predict, nothing else) as a secret and calls the lab over HTTPS. The lab never receives CNR credentials and sends CNR nothing but a reachability request.
+- **Contract `cnr-ml-contract/1`.** `GET /v1/integration/cnr/models` (feature contract of each deployed model) and `POST /v1/integration/cnr/assess/{slug}` (cases of `case_ref` + `features`, max 50). Results come back in request order with the `case_ref` echoed. The version string changes only for breaking changes.
+- **One code path.** Assessments call `routers/predict.run_prediction`, the same function as `/v1/predict`: per-key rate limit, deployed version only, SHA-256 check before loading, strict features, counts-only audit. The only differences are the audit action (`integration.assess`, with `channel: cnr` and an optional correlation ID) and the per-case envelope.
+- **Privacy.** `case_ref` is an opaque reference that only CNR can map back to a person (1-64 chars of `A-Za-z0-9._:-`; anything that looks like an email or a 9+ digit number is rejected). Neither references nor features are stored or logged. Unknown feature names are rejected, so names or IDs cannot be sent by accident. A `case_ref` is not a substitute for de-identification: CNR must not derive it from a name, phone or national ID.
+- **Outbound check.** `integration.probe` makes one GET to `CNR_API_BASE_URL` + `CNR_API_HEALTH_PATH`. The address comes only from the environment (no request can change it, so there is no server-side request forgery surface), must be https in production, may not embed credentials, sends no Authorization header or body and does not follow redirects. Any HTTP answer counts as reachable. It is admin-only, limited to 6 per minute and audited.
+- **Status** (`read:integration`, admin): configuration problems, active service keys with last use, deployed models, 24-hour counts of assessments and refusals.
+- **Not in this phase.** No bulk transfer of CNR records into the lab and no calls from the lab into CNR's data endpoints; that would need a separate de-identification and approval design. Treat these as open decisions with the data owner.
+- **Known limits.** The rate limit is per process (single instance). There is no per-caller allow-list of IP addresses; the service key is the only credential, so keep it in CNR's secret store and rotate it by revoking and re-creating it under Access.
 
 ## Dataset ingestion (Phase 2)
 1. **Inspect** (`/v1/datasets/inspect`): the file is parsed in memory, typed, scanned for identifiers and profiled. Nothing is stored. Values of flagged columns are never returned.

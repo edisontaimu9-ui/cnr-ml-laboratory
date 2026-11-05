@@ -11,7 +11,10 @@ class Settings(BaseSettings):
     bootstrap_admin_key: str = ""
     cors_origins: str = "http://localhost:8080"
     cnr_api_base_url: str = ""
-    service_version: str = "0.5.0"
+    # Phase 6: outbound reachability check of the CNR API (fixed URL from the environment, never from a request)
+    cnr_api_health_path: str = "/"
+    cnr_api_timeout_s: float = 5.0
+    service_version: str = "0.6.0"
     # Phase 2: dataset ingestion
     dataset_storage_dir: str = "./data/datasets"
     pseudonym_key: str = ""          # >= 32 chars; enables the "pseudonymise" action

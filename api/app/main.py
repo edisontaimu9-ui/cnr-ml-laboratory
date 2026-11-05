@@ -10,7 +10,7 @@ from .catalog import CATALOG, LABEL_NOTE
 from .config import get_settings
 from .db import Base, SessionLocal, add_missing_columns, engine
 from .models import ApiKey, Experiment, ModelDefinition, utcnow
-from .routers import admin, core, datasets, experiments, predict, registry
+from .routers import admin, core, datasets, experiments, integration, predict, registry
 from .security import hash_key
 
 log = logging.getLogger("cnr-ml")
@@ -93,4 +93,5 @@ app.include_router(datasets.router)
 app.include_router(experiments.router)
 app.include_router(registry.router)
 app.include_router(predict.router)
+app.include_router(integration.router)
 app.include_router(admin.router)

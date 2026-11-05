@@ -2,7 +2,7 @@
 
 An independent machine-learning platform for the Chakudya Nutrition Registry (CNR): datasets, training, evaluation, a model registry and a prediction API, with governance built in.
 
-**Status: Phase 5 of 6 — approved models are served.** You can upload and de-identify datasets, train and evaluate models, review and approve them, and serve the deployed version through a prediction API with a safety notice on every response. The CNR integration is Phase 6. Predictions will never be presented as confirmed diagnoses.
+**Status: Phase 6 of 6 — CNR integration.** You can upload and de-identify datasets, train and evaluate models, review and approve them, serve the deployed version, and let CNR request assessments through a dedicated, authenticated contract. Predictions are never presented as confirmed diagnoses.
 
 ## What Phase 1 delivers
 - **ML API** (`api/`, FastAPI): API-key authentication, four roles, audit log, full metadata schema (datasets, versions, experiments, model versions), a catalogue of the seven planned model targets, `/health`.
@@ -45,14 +45,22 @@ An independent machine-learning platform for the Chakudya Nutrition Registry (CN
 - **Endpoints:** `GET /v1/predict`, `GET /v1/predict/{slug}` (features and known categories), `POST /v1/predict/{slug}`.
 - **Dashboard:** a **Predict** page that builds the entry form from the deployed model.
 
+## What Phase 6 adds
+- **CNR contract (`cnr-ml-contract/1`):** `GET /v1/integration/cnr/models` lists deployed models with the exact features CNR must send. `POST /v1/integration/cnr/assess/{slug}` takes up to 50 cases, each an opaque `case_ref` plus `features`, and returns one result per case with the `case_ref` echoed back, the model version, approval reference, caveats and the safety notice. An optional `X-Request-Id` header is echoed as `correlation_id`.
+- **Same safety rules as Phase 5:** it runs through the same code as `/v1/predict`: deployed version only (409 otherwise), hash check, strict features, the per-key rate limit. Case references that look like emails or phone/ID numbers are rejected. Case references and features are never stored; the audit log (`integration.assess`) holds counts, model version, request ID and correlation ID only.
+- **Admin status and reachability:** `GET /v1/integration/cnr/status` shows whether the CNR address is configured, the active service keys and their last use, deployed models and 24-hour usage. `?probe=true` makes one outbound check of `CNR_API_BASE_URL` (no credentials or data sent, redirects not followed, 6 per minute, audited).
+- **Dashboard:** new **CNR integration** page (admin).
+- **Docs:** [docs/CNR_INTEGRATION.md](docs/CNR_INTEGRATION.md) has the contract and a worked example for the calling side.
+- CNR's own nutrition calculations stay in CNR. The lab neither pulls patient records from CNR nor pushes anything to it.
+
 ## Roles
 | Role | Can |
 |---|---|
 | viewer | read catalogue, models, experiments, datasets (cannot call predictions) |
 | data_scientist | viewer + create datasets, upload versions, preview rows, create experiments, register and submit model versions |
 | clinical_reviewer | viewer + approve or reject models in review, read audit log |
-| service | read catalogue and call predictions only (machine key for CNR) |
-| admin | everything, including keys, deploy, roll back and withdraw (still cannot review their own registrations) |
+| service | read catalogue, call predictions and CNR assessments only (machine key for CNR) |
+| admin | everything, including keys, deploy, roll back, withdraw and the CNR integration status (still cannot review their own registrations) |
 
 ## Run locally
 ```bash
@@ -68,4 +76,4 @@ Open the dashboard and sign in with the bootstrap key, then create per-person ke
 See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). Design and governance: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Roadmap
-1. Foundation and dashboard ✅ 2. Dataset ingestion and preprocessing ✅ 3. First XGBoost model and evaluation ✅ 4. Model registry and versioning ✅ 5. Approved model served via FastAPI ✅ 6. Integration with the CNR API
+1. Foundation and dashboard ✅ 2. Dataset ingestion and preprocessing ✅ 3. First XGBoost model and evaluation ✅ 4. Model registry and versioning ✅ 5. Approved model served via FastAPI ✅ 6. Integration with the CNR API ✅

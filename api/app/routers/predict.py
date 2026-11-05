@@ -4,7 +4,6 @@ import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -66,35 +65,43 @@ def schema(slug: str, db: Session = Depends(get_db)):
             "note": "Send only these fields. Leave out anything you do not know; missing values lower confidence."}
 
 
-@router.post("/{slug}")
-def make_prediction(slug: str, body: PredictRequest, request: Request,
-                    p: Principal = Depends(require("predict:models")), db: Session = Depends(get_db)):
+def run_prediction(db: Session, request: Request, p: Principal, slug: str, records: list[dict[str, Any]], *,
+                   audit_action: str = "prediction.made", extra: dict | None = None) -> dict:
+    """Shared by the direct endpoint and the CNR integration endpoint, so both enforce the same rules:
+    per-key rate limit, deployed version only, hash check, strict input, audit of counts only."""
     if not _limiter.hit(str(p.key_id)):
         wait = _limiter.retry_after(str(p.key_id))
-        return JSONResponse({"detail": "Too many prediction requests. Wait a moment and try again."},
-                            status_code=429, headers={"Retry-After": str(wait)})
+        raise HTTPException(429, "Too many prediction requests. Wait a moment and try again.",
+                            headers={"Retry-After": str(wait)})
     rid = uuid.uuid4().hex[:12]
     try:
         d, v = _live(db, slug)
     except HTTPException as e:
         if e.status_code == 409:
             audit.record(db, "prediction.refused", principal=p, request=request, resource_type="model",
-                         resource_id=slug, detail={"reason": "no deployed version", "request_id": rid})
+                         resource_id=slug, detail={"reason": "no deployed version", "request_id": rid, **(extra or {})})
         raise
     try:
         bundle = serving.load_bundle(v, slug)
-        results = serving.predict(bundle, body.records)
+        results = serving.predict(bundle, records)
     except serving.ServingError as e:
         if e.status == 503:
             audit.record(db, "prediction.refused", principal=p, request=request, resource_type="model_version",
-                         resource_id=v.id, detail={"reason": "artifact check failed", "request_id": rid})
+                         resource_id=v.id, detail={"reason": "artifact check failed", "request_id": rid, **(extra or {})})
         raise HTTPException(e.status, e.message)
-    audit.record(db, "prediction.made", principal=p, request=request, resource_type="model_version", resource_id=v.id,
+    audit.record(db, audit_action, principal=p, request=request, resource_type="model_version", resource_id=v.id,
                  detail={"model": slug, "version": v.version, "records": len(results), "request_id": rid,
-                         "low_confidence": sum(1 for r in results if r["risk_indicators"]["low_confidence"])})
+                         "low_confidence": sum(1 for r in results if r["risk_indicators"]["low_confidence"]),
+                         **(extra or {})})
     m = v.metrics_json or {}
     caveats = list(m.get("limitations", []))[:3]
     if (m.get("warnings") or []):
         caveats.insert(0, f"This model was approved with {len(m['warnings'])} evaluation warning(s). See the registry.")
     return {"request_id": rid, "generated_at": utcnow().isoformat() + "Z", "decision_support_only": True,
             "safety_notice": SAFETY_NOTICE, "model": _model_block(d, v), "caveats": caveats, "results": results}
+
+
+@router.post("/{slug}")
+def make_prediction(slug: str, body: PredictRequest, request: Request,
+                    p: Principal = Depends(require("predict:models")), db: Session = Depends(get_db)):
+    return run_prediction(db, request, p, slug, body.records)

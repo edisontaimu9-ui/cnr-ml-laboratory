@@ -10,7 +10,7 @@ from ..schemas import MeOut
 from ..security import Principal, get_principal
 
 router = APIRouter()
-CURRENT_PHASE = 5
+CURRENT_PHASE = 6
 
 
 @router.get("/health", tags=["system"])

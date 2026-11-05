@@ -14,6 +14,8 @@ Phase 4 needs no new service or manual SQL. New columns are added to `mlab_model
 
 Phase 5 needs no new service, disk or SQL. Predictions are served by the same API process from the model file on the persistent disk. Before Phase 6, create a **service** key under Access for the CNR integration and store it only as a secret in the calling service. Keep `/docs` off in production (already the default). The first request after a deploy or restart loads the model, so it can be slower.
 
+Phase 6 needs no new service, disk or SQL. Steps: (1) create a **service** key under Access, named for the caller (e.g. `cnr-production`), and store it only as a secret in CNR; (2) confirm `CNR_API_BASE_URL` on the API (already in `render.yaml`) and, if CNR has a lightweight health route, set `CNR_API_HEALTH_PATH` to it; (3) open **CNR integration** in the dashboard and press *Check CNR API*. See [CNR_INTEGRATION.md](CNR_INTEGRATION.md) for the calling side. To rotate the key, create a new service key, update CNR's secret, then revoke the old one.
+
 ## 3. Cloudflare DNS
 Add CNAME records (proxied): `ml` → your API's `*.onrender.com` host, `ml-lab` → the dashboard's `*.onrender.com` host. Add the same custom domains in each Render service's Settings → Custom Domains.
 

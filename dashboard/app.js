@@ -44,6 +44,7 @@
     { id: "predict", label: "Predict", perm: "predict:models", render: predictPage },
     { id: "registry", label: "Registry", perm: "read:models", render: registry },
     { id: "datasets", label: "Datasets", perm: "read:datasets", render: datasets },
+    { id: "integration", label: "CNR integration", perm: "read:integration", render: integrationPage },
     { id: "audit", label: "Audit log", perm: "read:audit", render: audit },
     { id: "access", label: "Access", perm: "manage:keys", render: access },
   ];
@@ -191,6 +192,33 @@
 
 
 
+  async function integrationPage() {
+    const s = await api("/v1/integration/cnr/status");
+    const out = h("div"), probeOut = h("p", { class: "muted", role: "status" });
+    const c = s.cnr_api;
+    const probeBtn = h("button", { class: "primary", disabled: !c.configured, onclick: async () => {
+      probeBtn.disabled = true; probeOut.textContent = "Checking…";
+      try {
+        const r = (await api("/v1/integration/cnr/status?probe=true")).probe;
+        probeOut.textContent = r.reachable ? "CNR API answered (HTTP " + r.http_status + ", " + r.latency_ms + " ms)." : "Not reachable: " + r.reason;
+      } catch (e) { probeOut.textContent = e.message; }
+      finally { probeBtn.disabled = !c.configured; }
+    } }, "Check CNR API");
+    out.append(
+      h("p", { class: "muted" }, "CNR calls the laboratory with a service key. The laboratory sends CNR no patient data and no credentials. Contract: " + s.contract + "."),
+      h("div", { class: "stats" },
+        [["Deployed models", s.deployed_models], ["CNR assessments (24 h)", s.last_24h.assessments], ["Refused (24 h)", s.last_24h.refused], ["Active service keys", s.service_keys.length]]
+          .map(([l, n]) => h("div", { class: "stat" }, h("b", null, n), h("span", null, l)))),
+      h("h2", null, "CNR API address"),
+      c.configured ? h("p", null, c.base_url + c.health_path) : h("div", { class: "notice" }, c.problem + " Set CNR_API_BASE_URL on the API service."),
+      h("p", null, probeBtn), probeOut,
+      h("h2", null, "Service keys"));
+    if (!s.service_keys.length) out.append(empty("No service key yet", "Create a key with the service role under Access and store it only as a secret in CNR."));
+    else out.append(table(["Name", "Prefix", "Created", "Last used"], s.service_keys.map((k) => [k.name, k.prefix, fmt(k.created_at), fmt(k.last_used_at)])));
+    if (!s.deployed_models) out.append(h("div", { class: "notice" }, "No model is deployed, so CNR assessments are refused with a clear message."));
+    return [h("h1", null, "CNR integration"), out];
+  }
+
   async function predictPage() {
     const list = await api("/v1/predict");
     const out = [h("h1", null, "Predict"),
@@ -270,7 +298,7 @@
     if (arg) return versionDetail(Number(arg));
     const rows = await api("/v1/models/versions?limit=200");
     return [h("h1", null, "Model registry"),
-      h("div", { class: "notice" }, "A version moves from candidate to in review to approved, and only then can an administrator deploy it. Deploying marks the version to be served; no predictions are served until Phase 5."),
+      h("div", { class: "notice" }, "A version moves from candidate to in review to approved, and only then can an administrator deploy it. Deploying makes the version the one served by the prediction API."),
       rows.length ? table(["Model", "Version", "Status", "Result vs baseline", "Registered by", "Registered", ""], rows.map((v) => [v.model_name || v.model_slug, "v" + v.version, vBadge(v.status),
         v.headline.test != null ? v.headline.metric + " " + n3(v.headline.test) + " vs " + n3(v.headline.baseline) + (v.headline.warnings ? " · " + v.headline.warnings + " warning(s)" : "") : "—",
         v.created_by || "—", fmt(v.created_at), h("button", { class: "link", onclick: () => { location.hash = "registry/" + v.id; } }, "Open")]))
