@@ -19,7 +19,26 @@
   }
   const fmt = (iso) => (iso ? new Date(iso).toLocaleString() : "—");
 
+  // Loaders: a top progress bar while any request is in flight, and a spinner on the button that was just pressed.
+  let pending = 0, lastBtn = null, silent = false;
+  document.addEventListener("click", (e) => {
+    const b = e.target.closest && e.target.closest("button");
+    lastBtn = b && !b.closest("nav") && !b.classList.contains("link") ? { el: b, t: performance.now() } : null;
+  }, true);
+
   async function api(path, opts = {}) {
+    const btn = lastBtn && performance.now() - lastBtn.t < 150 ? lastBtn.el : null;
+    pending++;
+    if (!silent) document.body.classList.add("busy");
+    if (btn) { btn.classList.add("loading"); btn.setAttribute("aria-busy", "true"); }
+    try { return await request(path, opts); }
+    finally {
+      if (--pending === 0) document.body.classList.remove("busy");
+      if (btn) { btn.classList.remove("loading"); btn.removeAttribute("aria-busy"); }
+    }
+  }
+
+  async function request(path, opts) {
     let res;
     try {
       const headers = { Authorization: "Bearer " + store.get() };
@@ -49,6 +68,7 @@
     { id: "access", label: "Access", perm: "manage:keys", render: access },
   ];
 
+  const loader = (text) => h("div", { class: "loader", role: "status" }, h("span", { class: "spinner", "aria-hidden": "true" }), text);
   const empty = (title, body) => h("div", { class: "empty" }, h("b", null, title), h("p", null, body));
 
   async function overview() {
@@ -155,7 +175,7 @@
         " · " + (cfg.n_estimators || "?") + " trees, depth " + (cfg.max_depth || "?") + " · started " + fmt(e.created_at) + " by " + (e.created_by || "—"))];
     if (e.status === "queued" || e.status === "running") {
       out.push(h("div", { class: "notice" }, "Training is running. This page refreshes by itself."));
-      poll = setTimeout(() => { if (location.hash.slice(1) === "experiments/" + id) show("experiments/" + id); }, 2500);
+      poll = setTimeout(() => { if (location.hash.slice(1) === "experiments/" + id) show("experiments/" + id, true); }, 2500);
       return out;
     }
     if (e.status === "failed") { out.push(h("div", { class: "notice" }, m.error || "The run failed.")); return out; }
@@ -551,27 +571,29 @@
       h("tbody", null, rows.map((r) => h("tr", null, r.map((c) => h("td", null, c)))))));
   }
 
-  async function show(id) {
+  async function show(id, quiet = false) {
     clearTimeout(poll);
     const [pid, arg] = String(id || "").split("/");
     const page = PAGES.find((p) => p.id === pid) || PAGES[0];
     document.querySelectorAll("#nav button").forEach((b) => { if (b.dataset.id === page.id) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current"); });
     const view = $("view");
-    view.replaceChildren(h("p", null, "Loading…"));
+    if (!quiet) view.replaceChildren(loader("Loading " + page.label.toLowerCase() + "…"));
+    silent = quiet;
     try { view.replaceChildren(...[].concat(await page.render(arg)).flat().filter(Boolean)); }
     catch (e) { view.replaceChildren(h("h1", null, page.label), h("div", { class: "notice" }, e.message)); }
+    finally { silent = false; }
     view.focus({ preventScroll: true });
   }
 
   async function start() {
     try { me = await api("/v1/me"); } catch (e) { return showLogin(e.message); }
-    $("login").hidden = true; $("app").hidden = false;
+    $("login").hidden = true; $("app").hidden = false; $("boot").hidden = true;
     $("who").textContent = me.name + " (" + me.role.replace("_", " ") + ")";
     const allowed = PAGES.filter((p) => !p.perm || me.permissions.includes(p.perm));
     $("nav").replaceChildren(...allowed.map((p) => h("button", { "data-id": p.id, onclick: () => { location.hash = p.id; } }, p.label)));
     show(location.hash.slice(1));
   }
-  function showLogin(msg) { $("app").hidden = true; $("login").hidden = false; $("login-error").textContent = msg || ""; $("key").focus(); }
+  function showLogin(msg) { $("boot").hidden = true; $("app").hidden = true; $("login").hidden = false; $("login-error").textContent = msg || ""; $("key").focus(); }
   function signOut() { store.clear(); me = null; showLogin(); }
 
   $("signin").addEventListener("click", () => { const k = $("key").value.trim(); if (!k) return; store.set(k); $("key").value = ""; start(); });
