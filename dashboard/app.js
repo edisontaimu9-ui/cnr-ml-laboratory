@@ -67,10 +67,111 @@
         h("p", null, m.description), h("small", null, "Task: " + m.task_type)))];
   }
 
-  async function experiments() {
+  let poll = null;
+  const pct = (x) => (x == null ? "—" : (100 * x).toFixed(1) + "%");
+  const n3 = (x) => (x == null ? "—" : String(x));
+  const statusBadge = (st) => h("span", { class: "badge " + (st === "failed" ? "bad" : st === "completed" ? "" : "planned") }, st);
+
+  async function experiments(arg) {
+    if (arg === "new") return experimentForm();
+    if (arg) return experimentDetail(Number(arg));
     const rows = await api("/v1/experiments");
-    return [h("h1", null, "Experiments"), rows.length ? table(["ID", "Framework", "Status", "Started", "By"], rows.map((r) => [r.id, r.framework, r.status, fmt(r.created_at), r.created_by || "—"]))
-      : empty("No experiments yet", "Training runs and their metrics will appear here once the first XGBoost model is trained (Phase 3).")];
+    return [h("h1", null, "Experiments"),
+      h("p", null, "Each run trains an XGBoost model on a de-identified dataset version and reports honest hold-out results next to a trivial baseline."),
+      can("write:experiments") ? h("p", null, h("button", { class: "primary", onclick: () => { location.hash = "experiments/new"; } }, "New experiment")) : null,
+      rows.length ? table(["#", "Model", "Status", "Result vs baseline", "By", "Started", ""], rows.map((r) => [r.id, r.model_slug || "—", statusBadge(r.status),
+        r.summary && r.summary.test != null ? r.summary.metric + " " + n3(r.summary.test) + " vs " + n3(r.summary.baseline) : (r.summary && r.summary.error ? "failed" : "—"),
+        r.created_by || "—", fmt(r.created_at), h("button", { class: "link", onclick: () => { location.hash = "experiments/" + r.id; } }, "Open")]))
+      : empty("No experiments yet", can("write:experiments") ? "Upload a dataset version first, then start an experiment." : "A data scientist or admin can start the first experiment.")];
+  }
+
+  async function experimentForm() {
+    const [models, sets] = await Promise.all([api("/v1/catalog"), api("/v1/datasets")]);
+    const usable = sets.filter((d) => d.version_count > 0);
+    if (!usable.length) return [h("h1", null, "New experiment"), empty("No dataset versions yet", "Create a dataset and upload a file under Datasets first.")];
+    const model = h("select", { id: "xm" }, models.map((m) => h("option", { value: m.slug }, m.name + " (" + m.task_type + ")")));
+    const dset = h("select", { id: "xd" }, usable.map((d) => h("option", { value: d.id }, d.name)));
+    const ver = h("select", { id: "xv" });
+    const target = h("select", { id: "xt" });
+    const excl = h("div", { class: "checks" });
+    const err = h("p", { class: "error", role: "alert" });
+    let versions = [];
+    const num = (id, v, min, max, step) => h("input", { id, type: "number", value: v, min, max, step: step || 1 });
+    const trees = num("xn", 200, 10, 1000), depth = num("xdp", 4, 1, 10), lr = num("xlr", 0.1, 0.01, 0.5, 0.01), tsz = num("xts", 0.2, 0.1, 0.4, 0.05), seed = num("xs", 42, 0, 2147483647);
+    const bal = h("input", { id: "xb", type: "checkbox", checked: true });
+    const cols = () => (versions.find((v) => String(v.version) === ver.value) || { schema_info: { columns: [] } }).schema_info.columns || [];
+    const drawCols = () => {
+      const prev = target.value, names = cols().map((c) => c.name);
+      target.replaceChildren(...names.map((n) => h("option", { value: n, selected: n === prev }, n)));
+      drawExcl();
+    };
+    const drawExcl = () => excl.replaceChildren(...cols().filter((c) => c.name !== target.value).map((c) =>
+      h("label", { class: "chk" }, h("input", { type: "checkbox", value: c.name }), " " + c.name)));
+    const loadVersions = async () => {
+      const d = await api("/v1/datasets/" + dset.value);
+      versions = d.versions;
+      ver.replaceChildren(...versions.map((v) => h("option", { value: v.version }, "v" + v.version + " (" + v.row_count + " rows)")));
+      drawCols();
+    };
+    dset.addEventListener("change", loadVersions); ver.addEventListener("change", drawCols); target.addEventListener("change", drawExcl);
+    await loadVersions();
+    const go = h("button", { class: "primary", onclick: async () => {
+      err.textContent = ""; go.disabled = true;
+      try {
+        const body = { model_slug: model.value, dataset_id: Number(dset.value), version: Number(ver.value), target: target.value,
+          exclude: [...excl.querySelectorAll("input:checked")].map((i) => i.value), n_estimators: Number(trees.value), max_depth: Number(depth.value),
+          learning_rate: Number(lr.value), test_size: Number(tsz.value), seed: Number(seed.value), balance_classes: bal.checked };
+        const e = await api("/v1/experiments", { method: "POST", body: JSON.stringify(body) });
+        location.hash = "experiments/" + e.id;
+      } catch (e) { err.textContent = e.message; go.disabled = false; }
+    } }, "Start training");
+    return [h("p", null, h("button", { class: "link", onclick: () => { location.hash = "experiments"; } }, "← All experiments")), h("h1", null, "New experiment"),
+      h("div", { class: "notice" }, "Exclude every column the label is calculated from (for a nutrition status: MUAC, weight-for-height, z-scores). Leaving them in gives a near-perfect score that means nothing in practice."),
+      h("div", { class: "form3" }, field("Model", model, "xm"), field("Dataset", dset, "xd"), field("Version", ver, "xv"), field("Target column (what to predict)", target, "xt")),
+      h("label", null, "Columns to leave out of training"), excl,
+      h("details", { class: "card" }, h("summary", null, "Training settings"),
+        h("div", { class: "form3" }, field("Trees", trees, "xn"), field("Max depth", depth, "xdp"), field("Learning rate", lr, "xlr"), field("Test share", tsz, "xts"), field("Random seed", seed, "xs"),
+          h("div", null, h("label", { for: "xb" }, "Balance classes"), bal))),
+      go, err];
+  }
+
+  async function experimentDetail(id) {
+    const e = await api("/v1/experiments/" + id);
+    const m = e.metrics_json || {}, cfg = (e.params_json || {}).config || {};
+    const out = [h("p", null, h("button", { class: "link", onclick: () => { location.hash = "experiments"; } }, "← All experiments")),
+      h("div", { class: "row" }, h("h1", null, "Experiment #" + e.id), statusBadge(e.status)),
+      h("p", { class: "muted" }, (e.model_name || "") + " · dataset " + (e.params_json.dataset_id || "?") + " v" + (e.params_json.dataset_version || "?") + " · target " + (cfg.target || "?") +
+        " · " + (cfg.n_estimators || "?") + " trees, depth " + (cfg.max_depth || "?") + " · started " + fmt(e.created_at) + " by " + (e.created_by || "—"))];
+    if (e.status === "queued" || e.status === "running") {
+      out.push(h("div", { class: "notice" }, "Training is running. This page refreshes by itself."));
+      poll = setTimeout(() => { if (location.hash.slice(1) === "experiments/" + id) show("experiments/" + id); }, 2500);
+      return out;
+    }
+    if (e.status === "failed") { out.push(h("div", { class: "notice" }, m.error || "The run failed.")); return out; }
+    const t = m.test || {}, b = m.baseline || {}, cv = m.cv || {};
+    (m.warnings || []).forEach((w) => out.push(h("div", { class: "notice" }, w)));
+    const stat = (l, v, sub) => h("div", { class: "stat" }, h("b", null, v), h("span", null, l + (sub ? " · " + sub : "")));
+    if (m.task === "classification") {
+      out.push(h("h2", null, "Hold-out test (" + m.n_test + " rows)"),
+        h("div", { class: "stats" }, stat("Macro F1", n3(t.macro_f1), "95% range " + n3(t.macro_f1_ci95 && t.macro_f1_ci95[0]) + "–" + n3(t.macro_f1_ci95 && t.macro_f1_ci95[1])),
+          stat("Baseline macro F1", n3(b.macro_f1), b.strategy), stat("Balanced accuracy", pct(t.balanced_accuracy)), stat("Accuracy", pct(t.accuracy)), stat("ROC AUC", n3(t.roc_auc))),
+        h("p", { class: "muted" }, "Cross-validation on the training part (" + cv.folds + " folds): macro F1 " + n3(cv.macro_f1_mean) + " ± " + n3(cv.macro_f1_sd) + ", balanced accuracy " + n3(cv.balanced_accuracy_mean) + " ± " + n3(cv.balanced_accuracy_sd) + "."));
+      out.push(h("h2", null, "Per class"), table(["Class", "Precision", "Recall", "F1", "Test cases"], Object.entries(m.per_class || {}).map(([k, v]) => [k, v.precision, v.recall, v.f1, v.support])));
+      const cm = m.confusion_matrix || { labels: [], matrix: [] };
+      out.push(h("h2", null, "Confusion matrix"), h("p", { class: "muted" }, "Rows are the true class, columns the predicted class."),
+        table(["True \\ Predicted", ...cm.labels], cm.matrix.map((row, i) => [cm.labels[i], ...row])));
+    } else {
+      out.push(h("h2", null, "Hold-out test (" + m.n_test + " rows)"),
+        h("div", { class: "stats" }, stat("R²", n3(t.r2), "baseline " + n3(b.r2)), stat("RMSE", n3(t.rmse), "95% range " + n3(t.rmse_ci95 && t.rmse_ci95[0]) + "–" + n3(t.rmse_ci95 && t.rmse_ci95[1])),
+          stat("Baseline RMSE", n3(b.rmse), b.strategy), stat("MAE", n3(t.mae))),
+        h("p", { class: "muted" }, "Cross-validation (" + cv.folds + " folds): R² " + n3(cv.r2_mean) + " ± " + n3(cv.r2_sd) + ", RMSE " + n3(cv.rmse_mean) + " ± " + n3(cv.rmse_sd) + "."));
+    }
+    out.push(h("h2", null, "What the model relied on"), h("p", { class: "muted" }, "Share of total gain per feature. This shows what the model used, not what causes the outcome."),
+      h("div", { class: "bars" }, (m.feature_importance || []).slice(0, 12).map((f) => h("div", { class: "barrow" }, h("span", null, f.feature),
+        h("div", { class: "bar" }, h("i", { style: "width:" + Math.max(1, f.share * 100) + "%" })), h("span", null, pct(f.share))))));
+    out.push(h("h2", null, "Limits of this result"), h("ul", { class: "plain" }, (m.limitations || []).map((x) => h("li", null, x))),
+      h("p", { class: "muted" }, "Features used: " + [...(m.features.numeric || []), ...(m.features.categorical || [])].join(", ") + "."));
+    return out;
   }
 
   const can = (perm) => me && me.permissions.includes(perm);
@@ -248,6 +349,7 @@
   }
 
   async function show(id) {
+    clearTimeout(poll);
     const [pid, arg] = String(id || "").split("/");
     const page = PAGES.find((p) => p.id === pid) || PAGES[0];
     document.querySelectorAll("#nav button").forEach((b) => { if (b.dataset.id === page.id) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current"); });

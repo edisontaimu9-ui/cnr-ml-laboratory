@@ -45,3 +45,19 @@ def save(dataset_id: int, version: int, df: pd.DataFrame) -> tuple[str, bytes]:
 
 def load(uri: str, nrows: int | None = None) -> pd.DataFrame:
     return pd.read_csv(_path(uri), compression="gzip", nrows=nrows)
+
+
+def save_bytes(rel: str, data: bytes) -> str:
+    """Store an opaque private blob (e.g. a trained-model artifact). Never served over the API."""
+    target = _path("local://" + rel)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_suffix(".tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "wb") as f:
+        f.write(data)
+    os.replace(tmp, target)
+    return "local://" + rel
+
+
+def exists(uri: str) -> bool:
+    return _path(uri).is_file()

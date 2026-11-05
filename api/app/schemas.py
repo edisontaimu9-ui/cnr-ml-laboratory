@@ -77,11 +77,35 @@ class IngestPlan(BaseModel):
 class ExperimentOut(ORM):
     id: int
     model_definition_id: int
+    model_slug: str | None = None
+    dataset_version_id: int | None = None
     framework: str
     status: str
-    metrics_json: dict[str, Any]
+    summary: dict[str, Any] = {}
     created_by: str | None
     created_at: UTC
+    finished_at: UTC
+
+
+class ExperimentDetail(ExperimentOut):
+    model_name: str | None = None
+    params_json: dict[str, Any] = {}
+    metrics_json: dict[str, Any] = {}
+
+
+class ExperimentCreate(BaseModel):
+    model_slug: str = Field(max_length=80)
+    dataset_id: int
+    version: int | None = None
+    target: str = Field(max_length=200)
+    features: list[str] | None = Field(default=None, max_length=300)
+    exclude: list[str] = Field(default_factory=list, max_length=300)
+    test_size: float = Field(default=0.2, ge=0.1, le=0.4)
+    seed: int = Field(default=42, ge=0, le=2**31 - 1)
+    n_estimators: int = Field(default=200, ge=10, le=1000)
+    max_depth: int = Field(default=4, ge=1, le=10)
+    learning_rate: float = Field(default=0.1, ge=0.01, le=0.5)
+    balance_classes: bool = True
 
 
 class ModelVersionOut(ORM):

@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     bootstrap_admin_key: str = ""
     cors_origins: str = "http://localhost:8080"
     cnr_api_base_url: str = ""
-    service_version: str = "0.2.0"
+    service_version: str = "0.3.0"
     # Phase 2: dataset ingestion
     dataset_storage_dir: str = "./data/datasets"
     pseudonym_key: str = ""          # >= 32 chars; enables the "pseudonymise" action

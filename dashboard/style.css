@@ -70,6 +70,13 @@ ul.plain{margin:.4rem 0;padding-left:1.1rem}
 td select,td input{min-width:9rem}
 td input[type=checkbox]{width:auto}
 td>div{display:flex;flex-direction:column;gap:.3rem}
+.checks{display:flex;flex-wrap:wrap;gap:.3rem .9rem;margin:.3rem 0 1rem}
+label.chk{display:inline-flex;gap:.3rem;align-items:center;font-weight:400;margin:0}
+label.chk input{width:auto}
+.bars{display:grid;gap:.35rem;max-width:40rem}
+.barrow{display:grid;grid-template-columns:10rem 1fr 4rem;gap:.6rem;align-items:center;font-size:.9rem}
+.bar{background:var(--lake-soft);height:.65rem;border-radius:3px;overflow:hidden}
+.bar>i{display:block;height:100%;background:var(--lake)}
 @media (max-width:800px){
   #app{grid-template-columns:1fr}
   aside{position:static;height:auto;flex-direction:row;flex-wrap:wrap;align-items:center;padding:.6rem}
@@ -77,5 +84,6 @@ td>div{display:flex;flex-direction:column;gap:.3rem}
   nav button{white-space:nowrap}
   .who{margin:0 0 0 auto;flex-direction:row;align-items:center;gap:.7rem}
   .inline{grid-template-columns:1fr}
+  .barrow{grid-template-columns:6.5rem 1fr 3.5rem}
 }
 @media (prefers-reduced-motion:no-preference){ main{animation:in .25s ease-out} @keyframes in{from{opacity:.4}to{opacity:1}} }

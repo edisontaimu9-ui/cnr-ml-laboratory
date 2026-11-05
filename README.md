@@ -2,7 +2,7 @@
 
 An independent machine-learning platform for the Chakudya Nutrition Registry (CNR): datasets, training, evaluation, a model registry and a prediction API, with governance built in.
 
-**Status: Phase 2 of 6 — dataset ingestion and preprocessing.** You can now upload, check, de-identify and version datasets. No model has been trained, and nothing here makes predictions yet. Predictions will never be presented as confirmed diagnoses.
+**Status: Phase 3 of 6 — first XGBoost training and evaluation.** You can upload and de-identify datasets and run training experiments with honest hold-out evaluation. No model is approved or serving predictions; that needs Phases 4 and 5. Predictions will never be presented as confirmed diagnoses.
 
 ## What Phase 1 delivers
 - **ML API** (`api/`, FastAPI): API-key authentication, four roles, audit log, full metadata schema (datasets, versions, experiments, model versions), a catalogue of the seven planned model targets, `/health`.
@@ -17,6 +17,13 @@ An independent machine-learning platform for the Chakudya Nutrition Registry (CN
 - **Cleaning:** header normalisation, missing-value tokens, numeric/date typing, empty-row and duplicate removal. No imputation or encoding here; that happens inside training (Phase 3) to avoid leakage.
 - **Governance:** every version records a source hash, stored-file hash, approval reference, uploader, a de-identification report and a k-anonymity check on quasi-identifiers. Uploads, rejections and previews are audited.
 - **Endpoints:** `POST /v1/datasets`, `POST /v1/datasets/inspect`, `GET /v1/datasets/{id}`, `POST /v1/datasets/{id}/versions`, `GET /v1/datasets/{id}/versions/{n}/preview`.
+
+## What Phase 3 adds
+- **Experiments:** pick a catalogue model, a dataset version, a target column and columns to leave out; the API trains an XGBoost model in the background and records the result.
+- **Honest evaluation:** stratified hold-out split, cross-validation on the training part only, a trivial baseline next to every score, a bootstrap 95% range, per-class results, confusion matrix and feature importance. All preprocessing sits inside the pipeline, so nothing leaks from the test set.
+- **Guards:** at least 50 rows and 10 examples per class; warnings for small datasets, a model that does not beat the baseline, and suspiciously strong results (likely label leakage, for example MUAC when predicting a nutrition status derived from it).
+- **Governance:** a run never makes a model available. The first completed run only moves the catalogue entry from `planned` to `in_development`. The fitted pipeline is saved privately for Phase 4 and is never served.
+- **Endpoints:** `POST /v1/experiments`, `GET /v1/experiments`, `GET /v1/experiments/{id}`. One experiment runs at a time.
 
 ## Roles
 | Role | Can |
@@ -40,4 +47,4 @@ Open the dashboard and sign in with the bootstrap key, then create per-person ke
 See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). Design and governance: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Roadmap
-1. Foundation and dashboard ✅ 2. Dataset ingestion and preprocessing (this release) 3. First XGBoost model and evaluation 4. Model registry and versioning 5. Approved model served via FastAPI 6. Integration with the CNR API
+1. Foundation and dashboard ✅ 2. Dataset ingestion and preprocessing ✅ 3. First XGBoost model and evaluation 4. Model registry and versioning 5. Approved model served via FastAPI 6. Integration with the CNR API

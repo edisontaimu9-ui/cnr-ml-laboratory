@@ -8,7 +8,7 @@ Prefer a **new Supabase project** for the lab (keeps it independent of CNR). Cop
 2. Set the secrets on `cnr-ml-api`: `DATABASE_URL` (Supabase string) and `BOOTSTRAP_ADMIN_KEY` (`python -c "import secrets;print(secrets.token_urlsafe(48))"`).
 3. Also set `PSEUDONYM_KEY` (another 32+ random characters; keep it stable, or pseudonyms from different versions will not match).
 4. Deploy. Check `https://<service>.onrender.com/health` returns `{"status":"ok","database":"ok",...}`.
-Phase 2 stores de-identified datasets on a **persistent disk** (`mlab-data`, mounted at `/srv/data`, declared in `render.yaml`), which needs a paid instance. The container starts as root only to fix the disk's ownership and then runs as an unprivileged user. Back the disk up before relying on it.
+Phase 3 adds XGBoost and scikit-learn (the Docker image installs `libgomp1` for XGBoost). Training runs inside the API process, so a 512 MB Starter instance can run out of memory on larger datasets; if the service restarts during a run, move to a larger instance. Phase 2 stores de-identified datasets on a **persistent disk** (`mlab-data`, mounted at `/srv/data`, declared in `render.yaml`), which needs a paid instance. The container starts as root only to fix the disk's ownership and then runs as an unprivileged user. Back the disk up before relying on it.
 
 ## 3. Cloudflare DNS
 Add CNAME records (proxied): `ml` → your API's `*.onrender.com` host, `ml-lab` → the dashboard's `*.onrender.com` host. Add the same custom domains in each Render service's Settings → Custom Domains.

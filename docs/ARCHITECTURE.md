@@ -17,6 +17,13 @@
 `mlab_api_keys`, `mlab_model_definitions`, `mlab_datasets`, `mlab_dataset_versions`, `mlab_experiments`, `mlab_model_versions`, `mlab_audit_logs`.
 Model artifacts and datasets are **not** stored in Postgres or git. Phase 2 stores each de-identified dataset version as a gzip CSV on private disk (`DATASET_STORAGE_DIR`, a persistent volume in production) behind `app/storage.py`, which can be swapped for object storage without touching callers. `mlab_dataset_versions` gained columns in Phase 2; the API adds them to existing databases automatically at start-up (additive only, never destructive).
 
+## Training and evaluation (Phase 3)
+- `POST /v1/experiments` validates the request, records an `experiments` row (`queued`) and starts training in a background thread of the API process. The row moves to `running`, then `completed` or `failed`; the dashboard polls it. Only one run is allowed at a time (the service is small), and runs interrupted by a restart are marked `failed` at start-up.
+- `app/training.py` builds one sklearn `Pipeline`: numeric columns pass through (XGBoost handles missing values), categorical columns are filled and one-hot encoded, then `XGBClassifier` or `XGBRegressor`. The test split is taken first; cross-validation and fitting use the training part only. Class imbalance is handled with balanced sample weights.
+- Everything shown in the dashboard comes from `experiments.metrics_json`: test metrics, baseline, bootstrap range, CV mean and spread, per-class table, confusion matrix, top features, warnings, limitations. Failures store a user-safe message.
+- The fitted pipeline is stored with `joblib` under `DATASET_STORAGE_DIR/experiments/` and never exposed over the API. Phase 4 will register approved artifacts; only load files this service wrote itself.
+- A completed experiment does not make a model available. Availability still requires the review and sign-off added in Phases 4 and 5.
+
 ## Dataset ingestion (Phase 2)
 1. **Inspect** (`/v1/datasets/inspect`): the file is parsed in memory, typed, scanned for identifiers and profiled. Nothing is stored. Values of flagged columns are never returned.
 2. **Create version** (`/v1/datasets/{id}/versions`): the file is parsed again, the reviewed plan is applied, and only the resulting table is stored. The raw upload is discarded. Re-uploading an identical file is rejected.

@@ -9,8 +9,8 @@ from sqlalchemy import select
 from .catalog import CATALOG, LABEL_NOTE
 from .config import get_settings
 from .db import Base, SessionLocal, add_missing_columns, engine
-from .models import ApiKey, ModelDefinition
-from .routers import admin, core, datasets, registry
+from .models import ApiKey, Experiment, ModelDefinition, utcnow
+from .routers import admin, core, datasets, experiments, registry
 from .security import hash_key
 
 log = logging.getLogger("cnr-ml")
@@ -37,11 +37,21 @@ def _seed() -> None:
         db.commit()
 
 
+def _fail_interrupted() -> None:
+    """Training runs in-process; a restart kills them. Mark them failed instead of leaving them 'running'."""
+    with SessionLocal() as db:
+        for e in db.scalars(select(Experiment).where(Experiment.status.in_(["queued", "running"]))):
+            e.status, e.finished_at = "failed", utcnow()
+            e.metrics_json = {"error": "Interrupted by a service restart. Start it again."}
+        db.commit()
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     Base.metadata.create_all(engine)
     add_missing_columns()
     _seed()
+    _fail_interrupted()
     yield
 
 
@@ -80,5 +90,6 @@ async def security_headers(request, call_next):
 
 app.include_router(core.router)
 app.include_router(datasets.router)
+app.include_router(experiments.router)
 app.include_router(registry.router)
 app.include_router(admin.router)

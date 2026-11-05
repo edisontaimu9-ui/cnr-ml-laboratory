@@ -69,6 +69,9 @@ class DatasetVersion(Base):
     report_json: Mapped[dict] = mapped_column(JSON, default=dict)
     created_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
 
+    def schema_info_cols(self) -> list[dict]:
+        return (self.schema_json or {}).get("columns", [])
+
 
 class Experiment(Base):
     __tablename__ = "mlab_experiments"
