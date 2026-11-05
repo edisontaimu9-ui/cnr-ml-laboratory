@@ -158,6 +158,56 @@ class ExplorationDetail(ExplorationOut):
     results_json: dict[str, Any] = {}
 
 
+class HotspotCreate(BaseModel):
+    """District hotspot / prevalence-trend analysis of aggregated counts. Not tied to a catalogue model."""
+    dataset_id: int
+    version: int | None = None
+    area_column: str = Field(min_length=1, max_length=120)             # district, facility or community
+    cases_column: str = Field(min_length=1, max_length=120)            # count of children with the condition
+    denominator_column: str = Field(min_length=1, max_length=120)      # count of children examined
+    period_column: str | None = Field(default=None, max_length=120)    # month / year; needed for trends
+    latitude_column: str | None = Field(default=None, max_length=120)  # centre point of the area; needed for spatial parts
+    longitude_column: str | None = Field(default=None, max_length=120)
+    smoothing: Literal["auto", "global", "spatial"] = "auto"
+    rr_threshold: float = Field(default=1.0, ge=0.5, le=5.0)           # hotspot = above overall prevalence x this ratio
+    exceedance_cutoff: float = Field(default=0.95, gt=0.5, lt=1.0)
+    k_neighbours: int = Field(default=4, ge=2, le=10)
+    permutations: int = Field(default=999, ge=199, le=9999)
+    min_periods_trend: int = Field(default=4, ge=3, le=60)
+    report_top: int = Field(default=20, ge=5, le=100)
+    seed: int = Field(default=42, ge=0, le=2**31 - 1)
+    note: str = Field(default="", max_length=500)
+
+    @model_validator(mode="after")
+    def _check(self):
+        if bool(self.latitude_column) != bool(self.longitude_column):
+            raise ValueError("Give both latitude_column and longitude_column, or neither")
+        roles = [c for c in (self.area_column, self.cases_column, self.denominator_column, self.period_column,
+                             self.latitude_column, self.longitude_column) if c]
+        if len(set(roles)) != len(roles):
+            raise ValueError("Each role needs a different column")
+        if self.smoothing == "spatial" and not self.latitude_column:
+            raise ValueError("Spatial smoothing needs latitude_column and longitude_column")
+        return self
+
+
+class HotspotOut(ORM):
+    id: int
+    kind: str = "hotspot_analysis"
+    deployable: bool = False          # always false: never registered, deployed or sent to CNR
+    dataset_version_id: int | None = None
+    status: str
+    summary: dict[str, Any] = {}
+    created_by: str | None
+    created_at: UTC
+    finished_at: UTC
+
+
+class HotspotDetail(HotspotOut):
+    params_json: dict[str, Any] = {}
+    results_json: dict[str, Any] = {}
+
+
 class ModelVersionOut(ORM):
     id: int
     model_definition_id: int

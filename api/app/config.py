@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     # equal to ML_LAB_WEBHOOK_SECRET on the CNR API.
     cnr_webhook_url: str = ""
     cnr_webhook_secret: str = ""
-    service_version: str = "0.6.0"
+    service_version: str = "0.7.0"
     # Dataset ingestion
     dataset_storage_dir: str = "./data/datasets"
     pseudonym_key: str = ""          # >= 32 chars; enables the "pseudonymise" action

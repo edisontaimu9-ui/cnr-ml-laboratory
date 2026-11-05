@@ -61,6 +61,7 @@
     { id: "models", label: "Models", perm: "read:catalog", render: models },
     { id: "experiments", label: "Experiments", perm: "read:experiments", render: experiments },
     { id: "explorations", label: "Exploration", perm: "read:explorations", render: explorations },
+    { id: "hotspots", label: "Hotspots", perm: "read:hotspots", render: hotspots },
     { id: "predict", label: "Predict", perm: "predict:models", render: predictPage },
     { id: "registry", label: "Registry", perm: "read:models", render: registry },
     { id: "datasets", label: "Datasets", perm: "read:datasets", render: datasets },
@@ -79,7 +80,7 @@
       h("h1", null, "Overview"),
       h("p", null, "The Machine Learning Laboratory of the Chakudya Nutrition Registry (CNR). Upload and de-identify datasets, train and evaluate models, review and approve them in the registry, and serve the deployed version to CNR. Predictions are decision support, never confirmed diagnoses."),
       h("div", { class: "notice" }, o.safety_notice),
-      h("div", { class: "stats" }, [["Planned models", c.model_definitions], ["Datasets", c.datasets], ["Experiments", c.experiments], ["Explorations", c.explorations], ["Model versions", c.model_versions], ["Deployed models", c.deployed_models]]
+      h("div", { class: "stats" }, [["Planned models", c.model_definitions], ["Datasets", c.datasets], ["Experiments", c.experiments], ["Explorations", c.explorations], ["Hotspot analyses", c.hotspot_analyses], ["Model versions", c.model_versions], ["Deployed models", c.deployed_models]]
         .map(([l, n]) => h("div", { class: "stat" }, h("b", null, n), h("span", null, l)))),
       c.datasets === 0 ? empty("No datasets yet", "Create one under Datasets and upload a file. Nothing has been trained and no model is available for predictions.") : null,
       h("p", { class: "muted" }, "API " + o.service.version + " · " + o.service.environment),
@@ -415,6 +416,199 @@
     }
     const sc = scatter(r.projection || {}, c ? c.k : 0);
     if (sc) out.push(h("h2", null, "Picture of the data"), sc);
+    out.push(h("h2", null, "Limits of this result"), h("ul", { class: "plain" }, (r.limitations || []).map((q) => h("li", null, q))));
+    return out;
+  }
+
+
+  // ---------- Hotspots: district prevalence trends and hotspots from AGGREGATED counts. Never registered, never deployed. ----------
+  const hsBadge = () => h("span", { class: "badge explore" }, "aggregated analysis · never deployed");
+  const HS_COLORS = { hotspot: "#c0392b", watch: "#c98a1b", "not elevated": "#7a8b99" };
+  const hsStatus = (st) => h("span", { class: "badge " + (st === "hotspot" ? "hot" : st === "watch" ? "watch" : "planned") }, st);
+  const rr3 = (x) => (x == null ? "—" : Number(x).toFixed(2));
+  const dirText = { rising: "Rising", falling: "Falling", "no clear change": "No clear change" };
+
+  async function hotspots(arg) {
+    if (arg === "new") return hotspotForm();
+    if (arg) return hotspotDetail(Number(arg));
+    const rows = await api("/v1/hotspots");
+    const sum = (r) => {
+      const s = r.summary || {};
+      if (s.error) return "failed";
+      if (s.areas == null) return "—";
+      return [s.areas + " areas", s.hotspots + " hotspot" + (s.hotspots === 1 ? "" : "s"),
+        s.trend ? "trend " + (dirText[s.trend.direction] || s.trend.direction).toLowerCase() : null,
+        s.spatial ? (s.spatial.verdict === "clustering" ? "spatial clustering" : "no clear clustering") : null].filter(Boolean).join(" · ");
+    };
+    return [h("div", { class: "row" }, h("h1", null, "Hotspots"), hsBadge()),
+      h("p", null, "Find districts, facilities or communities where prevalence is higher than expected, and see how prevalence is changing over time. This works on counts per area and period only. No individual child is used."),
+      h("div", { class: "notice" }, "A hotspot analysis is never a model. It cannot be registered, reviewed, deployed, used for predictions or sent to CNR. It describes areas, not children, and a flag is a place to look first, not a diagnosis."),
+      can("write:hotspots") ? h("p", null, h("button", { class: "primary", onclick: () => { location.hash = "hotspots/new"; } }, "New hotspot analysis")) : null,
+      rows.length ? table(["#", "Status", "Result", "By", "Started", ""], rows.map((r) => [r.id, statusBadge(r.status), sum(r), r.created_by || "—", fmt(r.created_at),
+        h("button", { class: "link", onclick: () => { location.hash = "hotspots/" + r.id; } }, "Open")]))
+        : empty("No hotspot analyses yet", can("write:hotspots") ? "Upload a dataset version of counts per area (and period) first, then start an analysis." : "A data scientist or admin can start the first analysis.")];
+  }
+
+  async function hotspotForm() {
+    const sets = (await api("/v1/datasets")).filter((d) => d.version_count > 0);
+    const back = h("p", null, h("button", { class: "link", onclick: () => { location.hash = "hotspots"; } }, "← All hotspot analyses"));
+    if (!sets.length) return [back, h("h1", null, "New hotspot analysis"), empty("No dataset versions yet", "Create a dataset and upload a file of counts per area under Datasets first.")];
+    const dset = h("select", { id: "hd" }, sets.map((d) => h("option", { value: d.id }, d.name)));
+    const ver = h("select", { id: "hv" });
+    const pick = (id, optional) => h("select", { id }, optional ? [h("option", { value: "" }, "(none)")] : []);
+    const selArea = pick("ha"), selCases = pick("hc"), selDen = pick("hn"), selPer = pick("hp", true), selLat = pick("hla", true), selLon = pick("hlo", true);
+    const err = h("p", { class: "error", role: "alert" });
+    const num = (id, v, min, max, step) => h("input", { id, type: "number", value: v, min, max, step: step || 1 });
+    const smooth = h("select", { id: "hs" }, [["auto", "Automatic (spatial when coordinates are given)"], ["global", "Towards the overall rate"], ["spatial", "Towards nearby areas"]].map(([v, l]) => h("option", { value: v }, l)));
+    const rr = num("hrr", 1, 0.5, 5, 0.05), cut = num("hcut", 95, 55, 99.9, 0.5), knn = num("hk", 4, 2, 10), perm = num("hperm", 999, 199, 9999), minp = num("hmp", 4, 3, 60), seed = num("hsd", 42, 0, 2147483647);
+    const note = h("textarea", { id: "hnote", rows: 2, maxlength: 500, placeholder: "Optional: what this analysis is for. Do not type names or ID numbers." });
+    let versions = [];
+    const cols = () => ((versions.find((v) => String(v.version) === ver.value) || { schema_info: { columns: [] } }).schema_info.columns || []).map((c) => c.name);
+    const guess = (names, re, fallback) => names.find((n) => re.test(n)) || fallback;
+    const fill = (sel, names, chosen) => { sel.replaceChildren(...[...(sel.id === "hp" || sel.id === "hla" || sel.id === "hlo" ? [h("option", { value: "" }, "(none)")] : []), ...names.map((n) => h("option", { value: n }, n))]); sel.value = chosen || ""; };
+    const drawCols = () => {
+      const n = cols();
+      fill(selArea, n, guess(n, /district|facility|communit|area|^ta$/, n[0]));
+      fill(selCases, n, guess(n, /case|count|malnour|stunt|wast|sam|mam/, n[1]));
+      fill(selDen, n, guess(n, /examin|screen|denom|total|children|pop/, n[2]));
+      fill(selPer, n, guess(n, /month|year|period|date|week/, ""));
+      fill(selLat, n, guess(n, /^lat|latitude/, ""));
+      fill(selLon, n, guess(n, /^lon|lng|longitude/, ""));
+    };
+    const loadVersions = async () => {
+      versions = (await api("/v1/datasets/" + dset.value)).versions;
+      ver.replaceChildren(...versions.map((v) => h("option", { value: v.version }, "v" + v.version + " (" + v.row_count + " rows)")));
+      drawCols();
+    };
+    dset.addEventListener("change", loadVersions); ver.addEventListener("change", drawCols);
+    await loadVersions();
+    const go = h("button", { class: "primary", onclick: async () => {
+      err.textContent = "";
+      if (!!selLat.value !== !!selLon.value) { err.textContent = "Choose both a latitude and a longitude column, or neither."; return; }
+      go.disabled = true;
+      try {
+        const body = { dataset_id: Number(dset.value), version: Number(ver.value), area_column: selArea.value, cases_column: selCases.value, denominator_column: selDen.value,
+          period_column: selPer.value || null, latitude_column: selLat.value || null, longitude_column: selLon.value || null, smoothing: smooth.value,
+          rr_threshold: Number(rr.value), exceedance_cutoff: Number(cut.value) / 100, k_neighbours: Number(knn.value), permutations: Number(perm.value),
+          min_periods_trend: Number(minp.value), seed: Number(seed.value), note: note.value.trim() };
+        const x = await api("/v1/hotspots", { method: "POST", body: JSON.stringify(body) });
+        location.hash = "hotspots/" + x.id;
+      } catch (e) { err.textContent = e.message; go.disabled = false; }
+    } }, "Start analysis");
+    return [back, h("div", { class: "row" }, h("h1", null, "New hotspot analysis"), hsBadge()),
+      h("div", { class: "notice" }, "Use one row per area (and per period, for trends): the number of children with the condition, and the number examined. Never individual children. A period column enables trends. Centre-point latitude and longitude columns per area enable spatial smoothing and the clustering check; they are removed on upload unless you keep them with a written reason."),
+      h("div", { class: "form3" }, field("Dataset", dset, "hd"), field("Version", ver, "hv")),
+      h("div", { class: "form3" }, field("Area (district, facility or community)", selArea, "ha"), field("Cases (children with the condition)", selCases, "hc"), field("Children examined", selDen, "hn")),
+      h("div", { class: "form3" }, field("Period (optional, for trends)", selPer, "hp"), field("Latitude of the area centre (optional)", selLat, "hla"), field("Longitude of the area centre (optional)", selLon, "hlo")),
+      h("details", { class: "card" }, h("summary", null, "Settings"),
+        h("div", { class: "form3" }, field("Smoothing", smooth, "hs"), field("Hotspot: prevalence above this multiple of the overall", rr, "hrr"), field("Hotspot: required probability (%)", cut, "hcut")),
+        h("div", { class: "form3" }, field("Nearest areas used (spatial)", knn, "hk"), field("Permutations (clustering check)", perm, "hperm"), field("Fewest periods for a trend", minp, "hmp")),
+        h("div", { class: "form3" }, field("Random seed", seed, "hsd")), field("Note", note, "hnote")),
+      go, err];
+  }
+
+  function hsTrendChart(series) {
+    const NS = "http://www.w3.org/2000/svg", W = 560, H = 260, pl = 46, pr = 14, pt = 14, pb = 34;
+    const el = (tag, attrs) => { const e = document.createElementNS(NS, tag); for (const [a, v] of Object.entries(attrs || {})) e.setAttribute(a, v); return e; };
+    const pts = series.map((s, i) => ({ i, label: s.period, obs: s.prevalence, fit: s.fitted }));
+    const vals = pts.flatMap((p) => [p.obs, p.fit]).filter((v) => v != null);
+    if (pts.length < 2 || !vals.length) return null;
+    const y1 = Math.max(...vals) * 1.1, y0 = Math.max(0, Math.min(...vals) * 0.9);
+    const sx = (i) => pl + (i / (pts.length - 1)) * (W - pl - pr), sy = (v) => pt + (1 - (v - y0) / (y1 - y0 || 1)) * (H - pt - pb);
+    const svg = el("svg", { viewBox: "0 0 " + W + " " + H, role: "img", width: "100%", "aria-label": "Observed and fitted overall prevalence by period" });
+    svg.appendChild(el("rect", { x: 0.5, y: 0.5, width: W - 1, height: H - 1, fill: "none", stroke: "#c9d6da" }));
+    for (let g = 0; g <= 4; g++) {
+      const v = y0 + ((y1 - y0) * g) / 4, y = sy(v).toFixed(1);
+      svg.appendChild(el("line", { x1: pl, x2: W - pr, y1: y, y2: y, stroke: "#e3eaec" }));
+      const t = el("text", { x: pl - 6, y: Number(y) + 4, "text-anchor": "end", "font-size": 10.5, fill: "#5b6b72" }); t.textContent = (100 * v).toFixed(1) + "%"; svg.appendChild(t);
+    }
+    const path = (key, color, dash) => {
+      const p = pts.filter((q) => q[key] != null);
+      if (p.length < 2) return;
+      svg.appendChild(el("path", { d: p.map((q, k) => (k ? "L" : "M") + sx(q.i).toFixed(1) + " " + sy(q[key]).toFixed(1)).join(" "), fill: "none", stroke: color, "stroke-width": 2, "stroke-dasharray": dash || "" }));
+    };
+    path("fit", "#0e5a73", "6 4");
+    path("obs", "#c0392b");
+    pts.filter((q) => q.obs != null).forEach((q) => svg.appendChild(el("circle", { cx: sx(q.i).toFixed(1), cy: sy(q.obs).toFixed(1), r: 3, fill: "#c0392b" })));
+    const step = Math.max(1, Math.ceil(pts.length / 8));
+    pts.forEach((q) => { if (q.i % step === 0 || q.i === pts.length - 1) { const t = el("text", { x: sx(q.i).toFixed(1), y: H - 12, "text-anchor": "middle", "font-size": 10.5, fill: "#5b6b72" }); t.textContent = q.label; svg.appendChild(t); } });
+    return h("div", null, svg, h("p", { class: "muted" }, "Solid red: observed prevalence across all areas. Dashed blue: what the fitted model expects. Periods whose counts are too small to show are left out."));
+  }
+
+  function hsDotMap(areas) {
+    const NS = "http://www.w3.org/2000/svg", W = 560, H = 420, pad = 26;
+    const el = (tag, attrs) => { const e = document.createElementNS(NS, tag); for (const [a, v] of Object.entries(attrs || {})) e.setAttribute(a, v); return e; };
+    const pts = areas.filter((a) => a.centre);
+    if (pts.length < 2) return null;
+    const lats = pts.map((a) => a.centre[0]), lons = pts.map((a) => a.centre[1]);
+    const [la0, la1, lo0, lo1] = [Math.min(...lats), Math.max(...lats), Math.min(...lons), Math.max(...lons)];
+    // Keep north-up and roughly true to shape: one degree of longitude is shorter than one of latitude away from the equator.
+    const k = Math.cos((((la0 + la1) / 2) * Math.PI) / 180);
+    const spanX = (lo1 - lo0) * k || 1, spanY = la1 - la0 || 1, sc = Math.min((W - 2 * pad) / spanX, (H - 2 * pad) / spanY);
+    const ox = (W - spanX * sc) / 2, oy = (H - spanY * sc) / 2;
+    const sx = (lo) => ox + (lo - lo0) * k * sc, sy = (la) => H - oy - (la - la0) * sc;
+    const svg = el("svg", { viewBox: "0 0 " + W + " " + H, role: "img", width: "100%", "aria-label": "Schematic map of area centre points coloured by hotspot status" });
+    svg.appendChild(el("rect", { x: 0.5, y: 0.5, width: W - 1, height: H - 1, fill: "none", stroke: "#c9d6da" }));
+    [...pts].sort((a, b) => (a.status === "hotspot") - (b.status === "hotspot")).forEach((a) => {
+      const r = 4 + Math.min(10, Math.max(0, (a.smoothed_ratio || 1) - 0.6) * 6);
+      const c = el("circle", { cx: sx(a.centre[1]).toFixed(1), cy: sy(a.centre[0]).toFixed(1), r: r.toFixed(1), fill: HS_COLORS[a.status] || "#7a8b99", "fill-opacity": a.status === "not elevated" ? 0.45 : 0.85,
+        stroke: a.cluster === "high cluster" ? "#111" : "none", "stroke-width": a.cluster === "high cluster" ? 2 : 0 });
+      const t = el("title"); t.textContent = a.area + ": " + pct(a.smoothed_prevalence) + " (" + a.status + ")"; c.appendChild(t); svg.appendChild(c);
+      if (a.status === "hotspot") { const l = el("text", { x: (sx(a.centre[1]) + r + 3).toFixed(1), y: (sy(a.centre[0]) + 4).toFixed(1), "font-size": 10.5, fill: "#333" }); l.textContent = a.area.slice(0, 18); svg.appendChild(l); }
+    });
+    const legend = h("p", { class: "muted" }, ["hotspot", "watch", "not elevated"].map((k2) => h("span", { class: "chk" }, h("span", { class: "swatch", "data-c": HS_COLORS[k2] }), " " + k2 + "  ")));
+    legend.querySelectorAll(".swatch").forEach((s2) => { s2.style.background = s2.dataset.c; });
+    return h("div", null, svg, legend, h("p", { class: "muted" }, "A schematic of area centre points (north is up), not a boundary map. Larger dots have a higher smoothed prevalence; a black ring marks a local high cluster."));
+  }
+
+  async function hotspotDetail(id) {
+    const x = await api("/v1/hotspots/" + id);
+    const r = x.results_json || {}, pr = x.params_json || {}, cfg = pr.config || {};
+    const out = [h("p", null, h("button", { class: "link", onclick: () => { location.hash = "hotspots"; } }, "← All hotspot analyses")),
+      h("div", { class: "row" }, h("h1", null, "Hotspot analysis #" + x.id), hsBadge(), statusBadge(x.status)),
+      h("p", { class: "muted" }, "Dataset " + (pr.dataset_id || "?") + " v" + (pr.dataset_version || "?") + " · started " + fmt(x.created_at) + " by " + (x.created_by || "—") + (pr.note ? " · " + pr.note : ""))];
+    if (x.status === "queued" || x.status === "running") {
+      out.push(h("div", { class: "notice" }, "The analysis is running. This page refreshes by itself."));
+      poll = setTimeout(() => { if (location.hash.slice(1) === "hotspots/" + id) show("hotspots/" + id, true); }, 2500);
+      return out;
+    }
+    if (x.status === "failed") { out.push(h("div", { class: "notice" }, r.error || "The analysis failed.")); return out; }
+    const stat = (l, v, sub) => h("div", { class: "stat" }, h("b", null, v), h("span", null, l + (sub ? " · " + sub : "")));
+    const d = r.data || {}, t = r.trend, sp = r.spatial, areas = r.areas || [];
+    out.push(h("div", { class: "notice" }, r.notice));
+    (r.warnings || []).forEach((w) => out.push(h("div", { class: "notice" }, w)));
+    out.push(h("div", { class: "stats" }, stat("Areas", d.areas, d.periods ? d.periods + " periods" : "one snapshot"), stat("Overall prevalence", pct(r.overall.prevalence), d.total_examined + " children examined"),
+      stat("Hotspots", (r.hotspots || []).length, "of " + d.areas + " areas"),
+      t ? stat("Trend", dirText[t.overall.direction] || t.overall.direction, t.overall.rate_ratio_per_12_months != null ? "×" + rr3(t.overall.rate_ratio_per_12_months) + " per 12 months" : "×" + rr3(t.overall.rate_ratio_per_unit) + " per period") : null,
+      sp ? stat("Spatial clustering", sp.global.verdict === "clustering" ? "Yes" : "Not clear", "Moran's I " + n3(sp.global.i) + ", p " + n3(sp.global.p_value)) : null));
+
+    out.push(h("h2", null, "Hotspots"), h("p", { class: "muted" }, r.smoothing.hotspot_rule + " " + r.smoothing.description));
+    const dot = hsDotMap(areas);
+    if (dot) out.push(dot);
+    const top = r.hotspots || [];
+    out.push(top.length ? table(["Area", "Smoothed prevalence", "Probability above threshold", "Trend", "Local cluster"], top.map((q) => {
+      const a = areas.find((z) => z.area === q.area) || {};
+      return [q.area, pct(q.smoothed_prevalence) + (a.interval95 ? " (" + pct(a.interval95[0]) + "–" + pct(a.interval95[1]) + ")" : ""), pct(q.exceedance), q.rising ? "Rising" : ((a.trend || {}).direction ? dirText[a.trend.direction] : "—"), q.cluster || "—"];
+    })) : h("div", { class: "notice" }, "No area stands out clearly. Either prevalence is similar everywhere, or there is too little data to show differences."));
+
+    if (t) {
+      out.push(h("h2", null, "Prevalence trend"),
+        h("div", { class: "notice" }, h("b", null, (dirText[t.overall.direction] || t.overall.direction) + ". "), "Rate ratio " + rr3(t.overall.rate_ratio_per_unit) + " per " + t.unit + " (95% range " + rr3(t.overall.ci95[0]) + " to " + rr3(t.overall.ci95[1]) + ", p " + n3(t.overall.p_value) + "). A ratio under 1 means falling. " + t.model_choice));
+      const chart = hsTrendChart(t.series || []);
+      if (chart) out.push(chart);
+      if (t.heterogeneity) out.push(h("p", { class: "muted" }, "Do areas move differently? " + (t.heterogeneity.p_value < 0.05 ? "Yes (p " + n3(t.heterogeneity.p_value) + "), so one common trend hides real differences. See the area trends below." : "No clear evidence (p " + n3(t.heterogeneity.p_value) + ").")));
+    }
+    if (sp) {
+      out.push(h("h2", null, "Spatial clustering check"), h("div", { class: "notice" }, h("b", null, sp.global.verdict === "clustering" ? "Clustering found. " : "No clear clustering. "), sp.global.summary),
+        h("p", { class: "muted" }, "Neighbours: " + sp.neighbours + ". Moran's I " + n3(sp.global.i) + " (about " + n3(sp.global.expected_under_no_clustering) + " if there were none), tested with " + sp.global.permutations + " permutations. " + sp.note));
+    }
+
+    out.push(h("h2", null, "All areas"), h("p", { class: "muted" }, "Sorted by smoothed prevalence relative to the overall. Counts under 5 are hidden; smoothed prevalence is always shown. Intervals are 95% ranges after smoothing."));
+    out.push(table(["#", "Area", "Status", "Smoothed", "Ratio", "Probability", "Cases / examined", "Trend (rate ratio per " + (t ? t.unit : "period") + ")", "Cluster"],
+      areas.map((a) => [a.rank, a.area, hsStatus(a.status), pct(a.smoothed_prevalence) + (a.low_precision ? " ⚠" : ""), rr3(a.smoothed_ratio), pct(a.exceedance),
+        a.suppressed ? "hidden (small counts)" : a.cases + " / " + a.examined,
+        a.trend ? (a.trend.status === "fitted" ? rr3(a.trend.rate_ratio_per_unit) + " (" + (dirText[a.trend.direction] || a.trend.direction).toLowerCase() + ")" : a.trend.status) : "—", a.cluster || "—"])));
+    out.push(h("p", { class: "muted" }, "⚠ marks areas expecting very few cases, where the estimate leans on the overall rate."));
     out.push(h("h2", null, "Limits of this result"), h("ul", { class: "plain" }, (r.limitations || []).map((q) => h("li", null, q))));
     return out;
   }

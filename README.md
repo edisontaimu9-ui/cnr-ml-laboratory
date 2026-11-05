@@ -6,7 +6,7 @@ You can upload and de-identify datasets, train and evaluate models, review and a
 
 ## Platform
 - **ML API** (`api/`, FastAPI): API-key authentication, four roles, audit log, full metadata schema (datasets, versions, experiments, model versions), a catalogue of the seven planned model targets, `/health`.
-- **Dashboard** (`dashboard/`, static HTML/JS, no build step): installable as an app (PWA), with overview, models, experiments, exploration, datasets, registry, prediction, CNR integration, audit log and key management. Pages show honest empty states until there is data.
+- **Dashboard** (`dashboard/`, static HTML/JS, no build step): installable as an app (PWA), with overview, models, experiments, exploration, hotspots, datasets, registry, prediction, CNR integration, audit log and key management. Pages show honest empty states until there is data.
 - **Deployment**: Dockerfiles, `docker-compose.yml`, `render.yaml`, CI, Supabase RLS script.
 - It does not touch CNR's production API. The two will talk only through authenticated endpoints (see CNR integration below).
 
@@ -38,6 +38,18 @@ You can upload and de-identify datasets, train and evaluate models, review and a
 - **Guards:** at least 50 rows and two usable columns; identifier-like and high-cardinality columns are skipped with a note; warnings for heavy missingness, tiny groups and sampling (large tables are fitted on a 20,000-row sample, every row is still assigned and scored). Only one training run or exploration runs at a time.
 - **Endpoints:** `POST /v1/explorations`, `GET /v1/explorations`, `GET /v1/explorations/{id}`. Reading needs `read:explorations` (viewer, data scientist, clinical reviewer, admin); starting one needs `write:explorations` (data scientist, admin).
 - **Dashboard:** an **Exploration** page marked *exploration · never deployed*, with the structure verdict, group profiles, flagged rows and a two-dimensional picture.
+
+## District hotspots and prevalence trends (aggregated analysis)
+- **A separate type, not a model.** A *hotspot analysis* works on **counts per area (and period)**, never on individual children: the number with the condition, the number examined, and optionally a month or year and a centre point per area. Areas can be districts, facilities or communities. It supports the hotspot dashboard; no individual-level data is needed or accepted.
+- **Never deployed, never sent to CNR.** Same isolation as explorations: its own table (`mlab_hotspot_analyses`) with no link to model versions, written results only, no model file. Every result carries `kind: "hotspot_analysis"` and `deployable: false`; the `service` role cannot read it; tests enforce the isolation, including a static check that the code imports no registry, serving, predict, webhook or integration module.
+- **Prevalence trend:** Poisson regression with area effects, a common time trend and a log(children examined) offset. If counts vary more than Poisson allows, a negative binomial model is fitted too and chosen on AIC; otherwise Poisson is kept with standard errors widened to match. The result gives the rate ratio per period (and per 12 months for monthly data) with a 95% range, plus a trend for each area (false discovery rate controlled) and a test of whether areas move differently.
+- **Smoothing:** empirical-Bayes (Poisson-gamma) shrinkage pulls small, noisy areas towards the overall rate. With coordinates, each area is pulled towards its nearest neighbours instead (spatial smoothing). If the data show no more variation between areas than chance, every area is pooled to the overall rate, nothing is flagged, and the result says so.
+- **Hotspots:** the probability that an area's true prevalence exceeds the overall prevalence times a chosen ratio (default 1.0). *Hotspot* needs at least 95% (configurable); *watch* at least 80%. Intervals are 95% ranges after smoothing.
+- **Spatial clustering check** (needs coordinates and at least 8 areas): global Moran's I with a permutation test, and local Getis-Ord Gi* per area with false discovery rate control, on standardised differences from the overall rate. Areas are linked to their nearest neighbours by distance between centre points. With fewer than 15 areas the result warns that power is low.
+- **Honest by design:** in simulations with nothing planted, the analysis flags no hotspots and few false trends or clusters (checked in tests); with four planted hotspots it finds all four. Areas expecting very few cases are marked low precision. Counts under 5, and groups leaving fewer than 5 children, are hidden (smoothed prevalence is still shown). Area names never go to the audit log.
+- **Coordinates:** latitude and longitude columns are address-like, so upload removes them unless you keep them with a written reason (use area centre points, never households). Results carry centres rounded to about 1 km.
+- **Endpoints:** `POST /v1/hotspots`, `GET /v1/hotspots`, `GET /v1/hotspots/{id}`. Reading needs `read:hotspots` (viewer, data scientist, clinical reviewer, admin); starting one needs `write:hotspots` (data scientist, admin). One training run, exploration or analysis runs at a time.
+- **Dashboard:** a **Hotspots** page marked *aggregated analysis · never deployed*, with a schematic map of area centres, the hotspot table, the observed and fitted trend, the spatial verdict and a table of all areas.
 
 ## Model registry
 - **Registry:** a completed experiment can be registered as an immutable model version. The model file is copied, hashed (SHA-256) and the evaluation is frozen with it, together with the written intended use.
@@ -72,8 +84,8 @@ You can upload and de-identify datasets, train and evaluate models, review and a
 ## Roles
 | Role | Can |
 |---|---|
-| viewer | read catalogue, models, experiments, explorations, datasets (cannot call predictions) |
-| data_scientist | viewer + create datasets, upload versions, preview rows, create experiments and explorations, register and submit model versions |
+| viewer | read catalogue, models, experiments, explorations, hotspot analyses, datasets (cannot call predictions) |
+| data_scientist | viewer + create datasets, upload versions, preview rows, create experiments, explorations and hotspot analyses, register and submit model versions |
 | clinical_reviewer | viewer + approve or reject models in review, read audit log |
 | service | read catalogue, call predictions and CNR assessments only (machine key for CNR) |
 | admin | everything, including keys, deploy, roll back, withdraw and the CNR integration status (still cannot review their own registrations) |

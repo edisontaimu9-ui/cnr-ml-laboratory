@@ -105,6 +105,23 @@ class Exploration(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
+class HotspotAnalysis(Base):
+    """District hotspot and prevalence-trend analysis of AGGREGATED counts (one dataset version).
+
+    Like `Exploration`, deliberately NOT an Experiment: no model definition, no label, no stored model file and no
+    foreign key to `mlab_model_versions`, so the registry cannot pick it up and nothing can be served or sent to CNR.
+    Only the written results are kept, and they hold area-level figures, never individual rows."""
+    __tablename__ = "mlab_hotspot_analyses"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    dataset_version_id: Mapped[int | None] = mapped_column(ForeignKey("mlab_dataset_versions.id"), nullable=True)
+    params_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    results_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    status: Mapped[str] = mapped_column(String(32), default="queued")
+    created_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
 class ModelVersion(Base):
     """A registered, immutable copy of a trained model plus its review trail.
     Status: candidate -> in_review -> approved | rejected; approved -> deployed -> retired."""
