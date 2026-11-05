@@ -8,17 +8,32 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from . import audit
+from .config import get_settings
+from .ratelimit import SlidingWindow
 from .db import get_db
 from .models import ApiKey, utcnow
 
 _VIEW = {"read:catalog", "read:models", "read:experiments", "read:datasets"}
 ROLE_PERMISSIONS: dict[str, set[str]] = {
     "viewer": _VIEW,
-    "data_scientist": _VIEW | {"write:datasets", "write:experiments", "read:dataset_rows", "write:models"},
-    "clinical_reviewer": _VIEW | {"approve:models", "read:audit"},
+    "data_scientist": _VIEW | {"write:datasets", "write:experiments", "read:dataset_rows", "write:models", "predict:models"},
+    "clinical_reviewer": _VIEW | {"approve:models", "read:audit", "predict:models"},
+    # Machine key for the CNR integration (Phase 6): can list the catalogue and call predictions, nothing else.
+    "service": {"read:catalog", "read:models", "predict:models"},
     "admin": _VIEW | {"write:datasets", "write:experiments", "read:dataset_rows", "write:models", "approve:models",
-                      "read:audit", "manage:keys", "deploy:models"},
+                      "read:audit", "manage:keys", "deploy:models", "predict:models"},
 }
+
+
+_s = get_settings()
+# Counts wrong-key attempts per client address. It keeps the audit log and database from being flooded;
+# it is not what protects the keys (they are 256-bit random values). Valid keys are never blocked by it.
+fail_limiter = SlidingWindow(_s.auth_fail_limit, _s.auth_fail_window_s)
+
+
+def _addr(request: Request) -> str:
+    fwd = request.headers.get("x-forwarded-for")
+    return fwd.split(",")[-1].strip() if fwd else (request.client.host if request.client else "unknown")
 
 
 @dataclass
@@ -56,6 +71,10 @@ def get_principal(request: Request, db: Session = Depends(get_db),
     raw = _extract(authorization, x_api_key)
     row = db.scalar(select(ApiKey).where(ApiKey.key_hash == hash_key(raw))) if raw else None
     if row is None or row.revoked_at is not None or not hmac.compare_digest(row.key_hash, hash_key(raw or "")):
+        addr = _addr(request)
+        if not fail_limiter.hit(addr):
+            raise HTTPException(429, "Too many failed attempts. Wait a few minutes.",
+                                headers={"Retry-After": str(fail_limiter.retry_after(addr))})
         audit.record(db, "auth.denied", request=request, detail={"path": request.url.path})
         raise HTTPException(401, "Missing or invalid API key.", headers={"WWW-Authenticate": "Bearer"})
     row.last_used_at = utcnow()

@@ -2,7 +2,7 @@
 
 An independent machine-learning platform for the Chakudya Nutrition Registry (CNR): datasets, training, evaluation, a model registry and a prediction API, with governance built in.
 
-**Status: Phase 4 of 6 — model registry and review gate.** You can upload and de-identify datasets, run training experiments with honest hold-out evaluation, and register, review, approve and deploy-designate model versions. Nothing serves predictions yet; that is Phase 5. Predictions will never be presented as confirmed diagnoses.
+**Status: Phase 5 of 6 — approved models are served.** You can upload and de-identify datasets, train and evaluate models, review and approve them, and serve the deployed version through a prediction API with a safety notice on every response. The CNR integration is Phase 6. Predictions will never be presented as confirmed diagnoses.
 
 ## What Phase 1 delivers
 - **ML API** (`api/`, FastAPI): API-key authentication, four roles, audit log, full metadata schema (datasets, versions, experiments, model versions), a catalogue of the seven planned model targets, `/health`.
@@ -35,12 +35,23 @@ An independent machine-learning platform for the Chakudya Nutrition Registry (CN
 - **Dashboard:** new **Registry** page with a version page for each model (evaluation, warnings, review form, actions, history), and a *Register* panel on completed experiments.
 - "Deployed" only designates which version Phase 5 will serve. Registering, approving or deploying never exposes a prediction endpoint.
 
+## What Phase 5 adds
+- **Serving:** `POST /v1/predict/{slug}` answers only from the *deployed* version of a model. No deployed version means a clear 409 refusal, never a guess. Retiring or rolling back takes effect on the next request.
+- **Integrity:** the model file is hashed against the SHA-256 recorded at registration before it is ever loaded; a changed file pauses predictions (503) and is audited.
+- **Every response** carries the model name and version, approval and validation reference, intended use, evaluation headline, timestamp, request ID, a caveats list, `decision_support_only: true` and the safety notice. Results are called *risk estimates*, with per-class scores, a margin and a low-confidence flag; sparse or unfamiliar input lowers confidence and says so.
+- **Strict input:** only the model's own features are accepted (unknown fields such as names are rejected), numbers must be numbers, up to 50 records per call. Inputs and outputs are not stored; the audit log records counts, model version and request ID only.
+- **Limits:** 60 prediction requests per key per minute (`RATE_LIMIT_PREDICT_PER_MIN`), and repeated wrong-key attempts from one address are throttled (`AUTH_FAIL_LIMIT`) so they cannot flood the audit log. Valid keys are never blocked by the second limit.
+- **New role `service`:** can read the catalogue and call predictions, nothing else. Intended for the CNR integration in Phase 6.
+- **Endpoints:** `GET /v1/predict`, `GET /v1/predict/{slug}` (features and known categories), `POST /v1/predict/{slug}`.
+- **Dashboard:** a **Predict** page that builds the entry form from the deployed model.
+
 ## Roles
 | Role | Can |
 |---|---|
-| viewer | read catalogue, models, experiments, datasets |
+| viewer | read catalogue, models, experiments, datasets (cannot call predictions) |
 | data_scientist | viewer + create datasets, upload versions, preview rows, create experiments, register and submit model versions |
 | clinical_reviewer | viewer + approve or reject models in review, read audit log |
+| service | read catalogue and call predictions only (machine key for CNR) |
 | admin | everything, including keys, deploy, roll back and withdraw (still cannot review their own registrations) |
 
 ## Run locally
@@ -57,4 +68,4 @@ Open the dashboard and sign in with the bootstrap key, then create per-person ke
 See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). Design and governance: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Roadmap
-1. Foundation and dashboard ✅ 2. Dataset ingestion and preprocessing ✅ 3. First XGBoost model and evaluation ✅ 4. Model registry and versioning ✅ 5. Approved model served via FastAPI 6. Integration with the CNR API
+1. Foundation and dashboard ✅ 2. Dataset ingestion and preprocessing ✅ 3. First XGBoost model and evaluation ✅ 4. Model registry and versioning ✅ 5. Approved model served via FastAPI ✅ 6. Integration with the CNR API

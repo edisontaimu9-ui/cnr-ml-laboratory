@@ -12,6 +12,8 @@ Phase 3 adds XGBoost and scikit-learn (the Docker image installs `libgomp1` for 
 
 Phase 4 needs no new service or manual SQL. New columns are added to `mlab_model_versions` on the API's first start. Registered model files are stored on the same persistent disk, under `DATASET_STORAGE_DIR` in `models/` (next to `experiments/`), so include them in your disk backup. Before the first approval, create a **clinical_reviewer** key under Access for the reviewer; with `REQUIRE_SEPARATE_REVIEWER=true` (default) the admin key that registered a model cannot approve it.
 
+Phase 5 needs no new service, disk or SQL. Predictions are served by the same API process from the model file on the persistent disk. Before Phase 6, create a **service** key under Access for the CNR integration and store it only as a secret in the calling service. Keep `/docs` off in production (already the default). The first request after a deploy or restart loads the model, so it can be slower.
+
 ## 3. Cloudflare DNS
 Add CNAME records (proxied): `ml` → your API's `*.onrender.com` host, `ml-lab` → the dashboard's `*.onrender.com` host. Add the same custom domains in each Render service's Settings → Custom Domains.
 

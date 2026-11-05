@@ -9,7 +9,7 @@ def _iso(d: datetime | None) -> str | None:
 
 
 UTC = Annotated[datetime | None, PlainSerializer(_iso, return_type=str | None)]
-Role = Literal["admin", "data_scientist", "clinical_reviewer", "viewer"]
+Role = Literal["admin", "data_scientist", "clinical_reviewer", "viewer", "service"]
 
 
 class ORM(BaseModel):

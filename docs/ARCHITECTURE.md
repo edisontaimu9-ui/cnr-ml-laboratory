@@ -33,6 +33,15 @@ Model artifacts and datasets are **not** stored in Postgres or git. Phase 2 stor
 - **"Deployed" is a designation, not serving.** Phase 5 adds prediction endpoints that may load only the deployed version, after re-checking its hash.
 - Additive columns are added to `mlab_model_versions` automatically at start-up; no manual SQL migration is needed.
 
+## Serving (Phase 5)
+- **Only the deployed version is served**, looked up on every request, so a retire or rollback applies immediately. With none deployed the API refuses (409) and audits `prediction.refused`.
+- **Load path:** `serving.load_bundle` reads the artifact bytes, compares SHA-256 with the value recorded at registration and only then deserialises them. A mismatch returns 503 and is audited. The verified model is cached in memory per (version, hash); a restart re-verifies. This assumes the persistent disk is writable only by the API; protect it accordingly.
+- **Input contract:** features are exactly those the model was trained on. Unknown fields are rejected so identifiers cannot be sent by mistake. Missing values are allowed (XGBoost and the imputer handle them) but more than half missing, or a margin under 0.15, or a top score under 0.5, sets `low_confidence`. Unseen categories are treated as unknown and flagged.
+- **Output contract:** never a diagnosis. `kind: risk_estimate`, `decision_support_only: true`, the safety notice, model/version/approval reference, caveats (including that the model was approved with warnings, if so) and a request ID. Class scores are not calibrated probabilities and the dashboard says so.
+- **Privacy:** request bodies and results are not stored or logged. Audit detail: model, version, record count, low-confidence count, request ID.
+- **Limits:** per-key prediction limit and a per-address wrong-key counter, both in process memory (fine for one instance; use shared storage if scaled out). The wrong-key limiter protects the audit log and database from flooding; the keys themselves are 256-bit random values.
+- **Role `service`** is the machine identity for Phase 6.
+
 ## Dataset ingestion (Phase 2)
 1. **Inspect** (`/v1/datasets/inspect`): the file is parsed in memory, typed, scanned for identifiers and profiled. Nothing is stored. Values of flagged columns are never returned.
 2. **Create version** (`/v1/datasets/{id}/versions`): the file is parsed again, the reviewed plan is applied, and only the resulting table is stored. The raw upload is discarded. Re-uploading an identical file is rejected.
@@ -45,7 +54,7 @@ Model artifacts and datasets are **not** stored in Postgres or git. Phase 2 stor
 - Denied requests, key changes and (from Phase 2) uploads, training runs and predictions are written to the audit log. Secrets and request bodies are never logged.
 - `/docs` and `/openapi.json` are disabled when `ENVIRONMENT=production`. CORS is restricted to the dashboard origin.
 - Phase 2 adds `read:dataset_rows` (data_scientist and admin only) for row previews; viewers see only metadata. Audit detail for uploads holds counts, hashes and the approval reference, never rows, file names or cell values.
-- Known limits: no rate limiting yet, and the dashboard keeps the key in `sessionStorage` (cleared on tab close). Rate limiting and per-user login remain open and are candidates for Phase 5, before any prediction endpoint is exposed.
+- Known limits: rate limits are per process (Phase 5), and the dashboard keeps the key in `sessionStorage` (cleared on tab close). Per-user login remains open.
 
 ## Deployment gate (enforced since Phase 4)
 Candidate → clinical review (external validation evidence recorded) → approved → deployed, with rollback to the previous approved version. Human oversight remains mandatory for any clinical decision.

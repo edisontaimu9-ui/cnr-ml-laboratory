@@ -34,6 +34,7 @@
     { id: "overview", label: "Overview", perm: null, render: overview },
     { id: "models", label: "Models", perm: "read:catalog", render: models },
     { id: "experiments", label: "Experiments", perm: "read:experiments", render: experiments },
+    { id: "predict", label: "Predict", perm: "predict:models", render: predictPage },
     { id: "registry", label: "Registry", perm: "read:models", render: registry },
     { id: "datasets", label: "Datasets", perm: "read:datasets", render: datasets },
     { id: "audit", label: "Audit log", perm: "read:audit", render: audit },
@@ -181,6 +182,64 @@
     return out;
   }
 
+
+
+  async function predictPage() {
+    const list = await api("/v1/predict");
+    const out = [h("h1", null, "Predict"),
+      h("div", { class: "notice" }, list.safety_notice + " Enter measurements only. Never type names, phone numbers or ID numbers; the service rejects fields it does not know.")];
+    if (!list.models.length) return [...out, empty("No model is deployed", "A model is served only after it is approved by a clinical reviewer and deployed by an administrator under Registry.")];
+    const pick = h("select", { id: "pm" }, list.models.map((m) => h("option", { value: m.slug }, m.name + " (v" + m.version + ")")));
+    const area = h("div");
+    const draw = async () => {
+      area.replaceChildren(h("p", null, "Loading…"));
+      try { area.replaceChildren(await predictForm(await api("/v1/predict/" + pick.value))); }
+      catch (e) { area.replaceChildren(h("div", { class: "notice" }, e.message)); }
+    };
+    pick.addEventListener("change", draw);
+    await draw();
+    return [...out, field("Model", pick, "pm"), area];
+  }
+
+  function predictForm(s) {
+    const inputs = {};
+    const grid = h("div", { class: "form3" });
+    s.features.numeric.forEach((n) => { inputs[n] = h("input", { id: "pf-" + n, type: "number", step: "any" }); grid.append(field(n, inputs[n], "pf-" + n)); });
+    s.features.categorical.forEach((c) => {
+      inputs[c.name] = h("select", { id: "pf-" + c.name }, [h("option", { value: "" }, "(not recorded)")].concat(c.values.map((v) => h("option", { value: v }, v))));
+      grid.append(field(c.name, inputs[c.name], "pf-" + c.name));
+    });
+    const result = h("div"), err = h("p", { class: "error", role: "alert" });
+    const go = h("button", { class: "primary", onclick: async () => {
+      err.textContent = ""; result.replaceChildren(); go.disabled = true;
+      const rec = {};
+      for (const [k, el] of Object.entries(inputs)) if (el.value !== "") rec[k] = el.tagName === "SELECT" || el.type !== "number" ? el.value : Number(el.value);
+      try { result.replaceChildren(...showPrediction(await api("/v1/predict/" + s.slug, { method: "POST", body: JSON.stringify({ records: [rec] }) }))); }
+      catch (e) { err.textContent = e.message; }
+      finally { go.disabled = false; }
+    } }, "Estimate risk");
+    const ev = s.evaluation || {};
+    return h("div", null,
+      h("p", { class: "muted" }, "Version " + s.version + " · approved by " + (s.approved_by || "—") + " · evidence: " + (s.clinical_validation_ref || "—") + " · test " + (ev.metric || "") + " " + n3(ev.test) + " vs baseline " + n3(ev.baseline) + " on " + n3(ev.n_test) + " rows"),
+      h("p", { class: "muted" }, "Intended use: " + (s.intended_use || "—")),
+      grid, h("p", null, go), err, result);
+  }
+
+  function showPrediction(b) {
+    const r = b.results[0], ri = r.risk_indicators, out = [];
+    out.push(h("div", { class: "notice" }, b.safety_notice));
+    if (ri.low_confidence) out.push(h("div", { class: "notice" }, "Low confidence: the model is unsure or key measurements are missing. Do not rely on this estimate."));
+    r.notes.forEach((n) => out.push(h("div", { class: "notice" }, n)));
+    if (r.predicted_class != null) {
+      out.push(h("h2", null, "Estimated: " + r.predicted_class), h("p", { class: "muted" }, "A model estimate, not a diagnosis. Scores are not calibrated probabilities."),
+        h("div", { class: "bars" }, Object.entries(r.probabilities).map(([k, p]) => h("div", { class: "barrow" }, h("span", null, k), h("div", { class: "bar" }, h("i", { style: "width:" + Math.max(1, p * 100) + "%" })), h("span", null, pct(p))))));
+    } else {
+      out.push(h("h2", null, "Estimated value: " + r.predicted_value), h("p", { class: "muted" }, "A model estimate, not a diagnosis." + (b.model.evaluation.rmse != null ? " Typical error on test data (RMSE): " + n3(b.model.evaluation.rmse) + "." : "")));
+    }
+    out.push(h("ul", { class: "plain" }, b.caveats.map((c) => h("li", null, c))),
+      h("small", null, "Request " + b.request_id + " · " + b.model.name + " v" + b.model.version + " · " + fmt(b.generated_at) + ". Inputs are not stored."));
+    return out;
+  }
 
   const VSTATUS = { candidate: "planned", in_review: "planned", approved: "", deployed: "", rejected: "bad", retired: "planned" };
   const vBadge = (st) => h("span", { class: "badge " + (VSTATUS[st] ?? "planned") }, st.replace("_", " "));
@@ -430,7 +489,7 @@
   async function access() {
     const out = h("div");
     const name = h("input", { id: "kn", maxlength: 120 });
-    const role = h("select", { id: "kr" }, ["viewer", "data_scientist", "clinical_reviewer", "admin"].map((r) => h("option", { value: r }, r)));
+    const role = h("select", { id: "kr" }, ["viewer", "data_scientist", "clinical_reviewer", "service", "admin"].map((r) => h("option", { value: r }, r)));
     const err = h("p", { class: "error", role: "alert" });
     const create = h("button", { class: "primary", onclick: async () => {
       err.textContent = "";
