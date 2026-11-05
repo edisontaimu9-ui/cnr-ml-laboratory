@@ -32,6 +32,9 @@ def _summary(e: Experiment) -> dict:
     c = m.get("comparison")
     if c:
         out["vs_xgboost"] = {"difference": c.get("difference"), "verdict": c.get("verdict")}
+    cal = (m.get("calibration") or {}).get("after")
+    if cal:
+        out["calibration"] = {"brier": cal.get("brier"), "ece": cal.get("ece")}
     return out
 
 
@@ -69,6 +72,8 @@ def create_experiment(body: ExperimentCreate, request: Request, background: Back
     v = db.scalars(q.limit(1)).first()
     if v is None or not v.storage_uri:
         raise HTTPException(404, "Unknown dataset version.")
+    if body.algorithm == "logistic" and d.task_type != "classification":
+        raise HTTPException(422, "Logistic regression is for classification models only. Choose XGBoost or a neural network for this model.")
     cols = {c["name"] for c in (v.schema_info_cols())}
     for name in [body.target, *(body.features or []), *body.exclude]:
         if name not in cols:
@@ -80,7 +85,7 @@ def create_experiment(body: ExperimentCreate, request: Request, background: Back
                           max_depth=body.max_depth, learning_rate=body.learning_rate,
                           balance_classes=body.balance_classes, algorithm=body.algorithm,
                           hidden_layers=body.hidden_layers, alpha=body.alpha, max_iter=body.max_iter,
-                          compare_xgboost=body.compare_xgboost)
+                          compare_xgboost=body.compare_xgboost, logistic_c=body.logistic_c, calibration=body.calibration)
     e = Experiment(model_definition_id=d.id, dataset_version_id=v.id, framework=body.algorithm, status="queued",
                    params_json={"config": asdict(cfg), "dataset_id": v.dataset_id, "dataset_version": v.version,
                                 "model_slug": d.slug},

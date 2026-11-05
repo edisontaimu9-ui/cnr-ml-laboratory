@@ -106,12 +106,15 @@ class ExperimentCreate(BaseModel):
     max_depth: int = Field(default=4, ge=1, le=10)
     learning_rate: float = Field(default=0.1, ge=0.01, le=0.5)
     balance_classes: bool = True
-    algorithm: Literal["xgboost", "mlp"] = "xgboost"
+    algorithm: Literal["xgboost", "mlp", "logistic"] = "xgboost"
     # Neural network (mlp) settings. The XGBoost settings above are ignored for mlp runs and vice versa.
     hidden_layers: list[Annotated[int, Field(ge=2, le=256)]] = Field(default_factory=lambda: [64, 32], min_length=1, max_length=3)
     alpha: float = Field(default=1e-3, ge=1e-6, le=1.0)
     max_iter: int = Field(default=500, ge=50, le=1000)
-    compare_xgboost: bool = True
+    compare_xgboost: bool = True              # mlp and logistic
+    # Logistic regression settings (classification only). max_iter and compare_xgboost above also apply.
+    logistic_c: float = Field(default=1.0, ge=0.001, le=100.0)
+    calibration: Literal["none", "sigmoid", "isotonic"] = "none"   # recalibration is opt-in: it was not better in testing
 
 
 class ExplorationCreate(BaseModel):

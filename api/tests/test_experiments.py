@@ -211,3 +211,120 @@ def test_mlp_experiment_can_be_registered_with_its_comparison_frozen(client, ds)
     v = client.get(f"/v1/models/versions/{r.json()['id']}", headers=ADMIN).json()
     assert v["metrics_json"]["algorithm"] == "mlp" and v["metrics_json"]["comparison"]["reference"] == "xgboost"
     assert v["headline"]["metric"] == "macro_f1" and v["artifact_sha256"]
+
+
+# ---- interpretable logistic regression (calibrated probabilities) ----
+
+LR = {"algorithm": "logistic"}
+
+
+def test_logistic_classification_reports_coefficients_and_calibration(client, ds):
+    e = train(client, ds, calibration="sigmoid", **LR)
+    assert e["status"] == "completed", e["metrics_json"]
+    m = e["metrics_json"]
+    assert e["framework"] == "logistic" and m["algorithm"] == "logistic" and m["importance_method"].startswith("absolute")
+    assert m["model_settings"]["C"] == 1.0 and m["model_settings"]["calibration"] == "sigmoid"
+    assert m["calibration"]["summary"].startswith("Recalibration")
+    co = m["coefficients"]
+    assert co["binary"] is False and {o["class"] for o in co["outcomes"]} == {"moderate", "normal", "severe"}
+    assert {t["feature"] for o in co["outcomes"] for t in o["terms"]} <= {"age", "weight", "district"}
+    assert any(t["kind"] == "category" and t["level"] in ("Zomba", "Blantyre", "Mangochi") for t in co["outcomes"][0]["terms"])
+    for o in co["outcomes"]:                                                           # largest effects first
+        sizes = [abs(t["coefficient"]) for t in o["terms"]]
+        assert sizes == sorted(sizes, reverse=True)
+    cal = m["calibration"]
+    assert cal["method"] == "sigmoid" and {"brier", "log_loss", "ece", "reliability"} <= set(cal["after"]) and "before" in cal and cal["summary"]
+    assert sum(b["n"] for b in cal["after"]["reliability"]) == m["n_test"]
+    assert 0 <= cal["after"]["ece"] <= 1
+    assert any("balanced during training" in w for w in m["warnings"])                 # balanced classes by default
+    assert any("straight line" in x for x in m["limitations"])
+    c = m["comparison"]
+    assert c["reference"] == "xgboost" and c["selected"]["algorithm"] == "logistic" and c["same_split"]
+    assert c["verdict"] in ("logistic_better", "xgboost_better", "no_clear_difference")
+    assert e["summary"]["algorithm"] == "logistic" and "brier" in e["summary"]["calibration"]
+    assert storage.exists(m["artifact_uri"])
+
+
+def test_logistic_binary_gives_odds_ratios_and_hides_rare_levels(client, ds):
+    # binary target built from the training table: severe vs not (one outcome, odds ratios present)
+    rng = np.random.default_rng(11)
+    rows = ["age,weight,district,flag"]
+    for i in range(300):
+        age, w = int(rng.integers(6, 59)), float(rng.normal(10, 2))
+        d = "Zomba" if i % 2 else "Blantyre"
+        if i < 4:
+            d = "Tiny"                                                  # fewer than 10 rows: must not be named
+        flag = "yes" if (w + rng.normal(0, 1.2)) < 9.3 else "no"
+        rows.append(f"{age},{w:.2f},{d},{flag}")
+    d = client.post("/v1/datasets", json={"name": "lr-binary"}, headers=ADMIN).json()
+    r = client.post(f"/v1/datasets/{d['id']}/versions", headers=ADMIN, data={"approval_ref": "TEST-LR1"},
+                    files={"file": ("b.csv", "\n".join(rows) + "\n", "text/csv")})
+    assert r.status_code == 201, r.text
+    e = train(client, d["id"], target="flag", exclude=[], balance_classes=False, **LR)         # default: no recalibration
+    assert e["status"] == "completed", e["metrics_json"]
+    m = e["metrics_json"]
+    co = m["coefficients"]
+    assert co["binary"] and len(co["outcomes"]) == 1 and co["outcomes"][0]["class"] == "yes"
+    terms = co["outcomes"][0]["terms"]
+    assert all("odds_ratio" in t for t in terms) and "Tiny" not in str(m) and co["rare_levels_hidden"] >= 1
+    wt = next(t for t in terms if t["feature"] == "weight")
+    assert wt["coefficient"] < 0 and wt["odds_ratio"] < 1 and wt["sd"] and wt["odds_ratio_per_unit"] < 1     # heavier -> less likely
+    assert m["feature_importance"][0]["feature"] == "weight"
+    assert "before" not in m["calibration"] and m["calibration"]["method"] == "none"
+    assert not any("balanced during training" in w for w in m["warnings"])
+
+
+def test_logistic_calibration_runs_with_isotonic_and_warns_when_small(client, ds):
+    e = train(client, ds, calibration="isotonic", compare_xgboost=False, **LR)
+    assert e["status"] == "completed", e["metrics_json"]
+    m = e["metrics_json"]
+    assert m["calibration"]["method"] == "isotonic" and "comparison" not in m
+    assert any("Isotonic calibration" in w for w in m["warnings"])
+
+
+def test_calibration_verdict_wording():
+    from app.training import _calibration_verdict as v
+    base = {"brier": 0.30, "ece": 0.10}
+    assert "lowered" in v(base, {"brier": 0.25, "ece": 0.06})
+    assert "worse" in v(base, {"brier": 0.34, "ece": 0.12}) and "off" in v(base, {"brier": 0.34, "ece": 0.12})
+    assert "did not clearly change" in v(base, {"brier": 0.301, "ece": 0.10})
+
+
+def test_logistic_is_reproducible(client, ds):
+    a, b = train(client, ds, **LR)["metrics_json"], train(client, ds, **LR)["metrics_json"]
+    assert a["test"] == b["test"] and a["coefficients"] == b["coefficients"] and a["calibration"] == b["calibration"]
+
+
+def test_logistic_refused_for_regression(client, ds):
+    body = {"model_slug": "nutritional-outcome-prediction", "dataset_id": ds, "target": "score", "algorithm": "logistic"}
+    r = client.post("/v1/experiments", json=body, headers=ADMIN)
+    assert r.status_code == 422 and "classification" in r.json()["detail"]
+
+
+def test_logistic_input_is_validated(client, ds):
+    body = {"model_slug": "diabetes-risk", "dataset_id": ds, "target": "status", "algorithm": "logistic"}
+    for bad in ({"logistic_c": 0}, {"logistic_c": 1000}, {"calibration": "platt"}, {"max_iter": 5}):
+        assert client.post("/v1/experiments", json={**body, **bad}, headers=ADMIN).status_code == 422, bad
+
+
+def test_logistic_bundle_serves_calibrated_probabilities(client, ds):
+    import io
+
+    import joblib
+
+    from app import serving
+    m = train(client, ds, **LR)["metrics_json"]
+    bundle = joblib.load(io.BytesIO(storage.load_bytes(m["artifact_uri"])))
+    out = serving.predict(bundle, [{"age": 20, "weight": 9.1, "district": "Zomba"}, {"age": 30, "district": "Unknownville"}, {"weight": 8.0}])
+    assert len(out) == 3 and all(abs(sum(o["probabilities"].values()) - 1) < 1e-3 for o in out)
+    assert set(serving.categories(bundle)["district"]) == {"Blantyre", "Mangochi", "Zomba"}
+
+
+def test_logistic_experiment_can_be_registered(client, ds):
+    e = train(client, ds, model_slug="ckd-nutrition-risk", **LR)
+    assert e["status"] == "completed", e["metrics_json"]
+    r = client.post("/v1/models/versions", headers=ADMIN, json={
+        "experiment_id": e["id"], "intended_use": "Research use only, to test the registry with a logistic regression run."})
+    assert r.status_code == 201, r.text
+    v = client.get(f"/v1/models/versions/{r.json()['id']}", headers=ADMIN).json()
+    assert v["metrics_json"]["algorithm"] == "logistic" and v["metrics_json"]["coefficients"]["outcomes"] and v["artifact_sha256"]

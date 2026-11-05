@@ -99,7 +99,7 @@
   let poll = null;
   const pct = (x) => (x == null ? "—" : (100 * x).toFixed(1) + "%");
   const n3 = (x) => (x == null ? "—" : String(x));
-  const verdictShort = (v) => (v === "mlp_better" ? "ahead of XGBoost" : v === "xgboost_better" ? "behind XGBoost" : "no clear gap to XGBoost");
+  const verdictShort = (v) => (v === "mlp_better" || v === "logistic_better" ? "ahead of XGBoost" : v === "xgboost_better" ? "behind XGBoost" : "no clear gap to XGBoost");
   const statusBadge = (st) => h("span", { class: "badge " + (st === "failed" ? "bad" : st === "completed" ? "" : "planned") }, st);
 
   async function experiments(arg) {
@@ -107,9 +107,9 @@
     if (arg) return experimentDetail(Number(arg));
     const rows = await api("/v1/experiments");
     return [h("h1", null, "Experiments"),
-      h("p", null, "Each run trains an XGBoost model or a neural network (MLP) on a de-identified dataset version and reports honest hold-out results next to a trivial baseline. A neural network run can also be compared against XGBoost on the same split."),
+      h("p", null, "Each run trains an XGBoost model, a neural network (MLP) or an interpretable logistic regression on a de-identified dataset version and reports honest hold-out results next to a trivial baseline. A neural network or logistic regression run can also be compared against XGBoost on the same split."),
       can("write:experiments") ? h("p", null, h("button", { class: "primary", onclick: () => { location.hash = "experiments/new"; } }, "New experiment")) : null,
-      rows.length ? table(["#", "Model", "Status", "Result vs baseline", "By", "Started", ""], rows.map((r) => [r.id, (r.model_slug || "—") + (r.summary && r.summary.algorithm === "mlp" ? " (neural network)" : ""), statusBadge(r.status),
+      rows.length ? table(["#", "Model", "Status", "Result vs baseline", "By", "Started", ""], rows.map((r) => [r.id, (r.model_slug || "—") + (r.summary && r.summary.algorithm === "mlp" ? " (neural network)" : r.summary && r.summary.algorithm === "logistic" ? " (logistic regression)" : ""), statusBadge(r.status),
         r.summary && r.summary.test != null ? r.summary.metric + " " + n3(r.summary.test) + " vs " + n3(r.summary.baseline) + (r.summary.vs_xgboost ? " (" + verdictShort(r.summary.vs_xgboost.verdict) + ")" : "") : (r.summary && r.summary.error ? "failed" : "—"),
         r.created_by || "—", fmt(r.created_at), h("button", { class: "link", onclick: () => { location.hash = "experiments/" + r.id; } }, "Open")]))
       : empty("No experiments yet", can("write:experiments") ? "Upload a dataset version first, then start an experiment." : "A data scientist or admin can start the first experiment.")];
@@ -129,14 +129,19 @@
     const num = (id, v, min, max, step) => h("input", { id, type: "number", value: v, min, max, step: step || 1 });
     const trees = num("xn", 200, 10, 1000), depth = num("xdp", 4, 1, 10), lr = num("xlr", 0.1, 0.01, 0.5, 0.01), tsz = num("xts", 0.2, 0.1, 0.4, 0.05), seed = num("xs", 42, 0, 2147483647);
     const bal = h("input", { id: "xb", type: "checkbox", checked: true });
-    const algo = h("select", { id: "xa" }, [h("option", { value: "xgboost" }, "XGBoost (gradient-boosted trees)"), h("option", { value: "mlp" }, "Neural network (MLP)")]);
+    const algo = h("select", { id: "xa" }, [h("option", { value: "xgboost" }, "XGBoost (gradient-boosted trees)"), h("option", { value: "mlp" }, "Neural network (MLP)"), h("option", { value: "logistic" }, "Logistic regression (interpretable)")]);
     const layers = h("input", { id: "xl", type: "text", value: "64,32", maxlength: 20, inputmode: "numeric" });
     const alpha = num("xal", 0.001, 0.000001, 1, 0.0001), iters = num("xit", 500, 50, 1000, 50);
     const cmp = h("input", { id: "xc", type: "checkbox", checked: true });
     const xgbBox = h("div", { class: "form3" }, field("Trees", trees, "xn"), field("Max depth", depth, "xdp"), field("Learning rate", lr, "xlr"));
     const mlpBox = h("div", { class: "form3", hidden: true }, field("Hidden layers (sizes, comma separated, up to 3)", layers, "xl"), field("Weight penalty (alpha)", alpha, "xal"),
-      field("Max iterations", iters, "xit"), h("div", null, h("label", { for: "xc" }, "Compare against XGBoost"), cmp));
-    algo.addEventListener("change", () => { xgbBox.hidden = algo.value === "mlp"; mlpBox.hidden = algo.value !== "mlp"; });
+      field("Max iterations", iters, "xit"));
+    const lrC = num("xlc", 1, 0.001, 100, 0.1);
+    const lrCal = h("select", { id: "xcal" }, [h("option", { value: "none" }, "None (the model's own probabilities)"), h("option", { value: "sigmoid" }, "Sigmoid recalibration"), h("option", { value: "isotonic" }, "Isotonic recalibration (needs 1,000+ rows)")]);
+    const lrBox = h("div", { hidden: true }, h("div", { class: "form3" }, field("Penalty strength C (smaller = stronger shrinkage)", lrC, "xlc"), field("Probability recalibration", lrCal, "xcal")),
+      h("p", { class: "muted" }, "Classification models only. Coefficients are reported in the result. Recalibration is optional: logistic probabilities are often already well calibrated, and the result shows whether recalibration helped on the hold-out set. For probabilities that match real frequencies, turn off Balance classes."));
+    const cmpBox = h("div", { hidden: true }, h("label", { for: "xc" }, "Compare against XGBoost"), cmp);
+    algo.addEventListener("change", () => { xgbBox.hidden = algo.value !== "xgboost"; mlpBox.hidden = algo.value !== "mlp"; lrBox.hidden = algo.value !== "logistic"; cmpBox.hidden = algo.value === "xgboost"; });
     const cols = () => (versions.find((v) => String(v.version) === ver.value) || { schema_info: { columns: [] } }).schema_info.columns || [];
     const drawCols = () => {
       const prev = target.value, names = cols().map((c) => c.name);
@@ -166,7 +171,8 @@
         const body = { model_slug: model.value, dataset_id: Number(dset.value), version: Number(ver.value), target: target.value,
           exclude: [...excl.querySelectorAll("input:checked")].map((i) => i.value), n_estimators: Number(trees.value), max_depth: Number(depth.value),
           learning_rate: Number(lr.value), test_size: Number(tsz.value), seed: Number(seed.value), balance_classes: bal.checked,
-          algorithm: algo.value, hidden_layers: sizes.length ? sizes : [64, 32], alpha: Number(alpha.value), max_iter: Number(iters.value), compare_xgboost: cmp.checked };
+          algorithm: algo.value, hidden_layers: sizes.length ? sizes : [64, 32], alpha: Number(alpha.value), max_iter: Number(iters.value), compare_xgboost: cmp.checked,
+          logistic_c: Number(lrC.value), calibration: lrCal.value };
         const e = await api("/v1/experiments", { method: "POST", body: JSON.stringify(body) });
         location.hash = "experiments/" + e.id;
       } catch (e) { err.textContent = e.message; go.disabled = false; }
@@ -176,10 +182,36 @@
       h("div", { class: "form3" }, field("Model", model, "xm"), field("Dataset", dset, "xd"), field("Version", ver, "xv"), field("Target column (what to predict)", target, "xt")),
       h("label", null, "Columns to leave out of training"), excl,
       h("details", { class: "card" }, h("summary", null, "Training settings"),
-        h("div", { class: "form3" }, field("Algorithm", algo, "xa")), xgbBox, mlpBox,
+        h("div", { class: "form3" }, field("Algorithm", algo, "xa")), xgbBox, mlpBox, lrBox, cmpBox,
         h("div", { class: "form3" }, field("Test share", tsz, "xts"), field("Random seed", seed, "xs"),
           h("div", null, h("label", { for: "xb" }, "Balance classes"), bal))),
       go, err];
+  }
+
+  const num3 = (x) => (x == null ? "—" : (Math.abs(x) >= 100 ? Math.round(x) : Number(x.toPrecision(3))));
+  function coefficientSections(co) {
+    const out = [h("h2", null, "Coefficients"), h("p", { class: "muted" }, co.reading_guide)];
+    (co.outcomes || []).forEach((o) => {
+      if (!co.binary) out.push(h("h3", null, "Class: " + o.class));
+      const rows = o.terms.map((t) => [t.feature + (t.level != null ? " = " + t.level : " (per 1 SD)"), num3(t.coefficient),
+        co.binary ? num3(t.odds_ratio) : "—", co.binary ? (t.odds_ratio_per_unit != null ? num3(t.odds_ratio_per_unit) : "—") : "—"]);
+      out.push(table(co.binary ? ["Feature", "Coefficient (log-odds)", "Odds ratio", "Odds ratio per 1 unit"] : ["Feature", "Coefficient (log-odds)", "", ""], rows));
+      if (o.n_terms > o.terms.length) out.push(h("p", { class: "muted" }, "Showing the " + o.terms.length + " largest of " + o.n_terms + " terms."));
+    });
+    if (co.binary) out.push(h("p", { class: "muted" }, "Outcome modelled: " + co.outcomes[0].class + ". An odds ratio above 1 raises the odds of that outcome; below 1 lowers them."));
+    if (co.rare_levels_hidden) out.push(h("p", { class: "muted" }, "Category levels seen in fewer than 10 training rows are not listed."));
+    out.push(h("p", { class: "muted" }, co.note));
+    return out;
+  }
+  function calibrationSections(c) {
+    const a = c.after || {}, b = c.before;
+    const out = [h("h2", null, "Probability calibration"), h("div", { class: "notice" }, c.summary),
+      table(["Hold-out (" + c.n_test + " rows)", "Brier score", "Log loss", "Expected calibration error"],
+        [...(b ? [["Before recalibration", n3(b.brier), n3(b.log_loss), n3(b.ece)]] : []), [b ? "After " + c.method + " recalibration" : "Model's own probabilities", n3(a.brier), n3(a.log_loss), n3(a.ece)]]),
+      h("p", { class: "muted" }, "Reliability: when the model is this confident in its top class, how often is it right? Close agreement means the probabilities can be read as frequencies."),
+      table(["Confidence range", "Cases", "Mean confidence", "Observed accuracy"], (a.reliability || []).map((r) => [pct(r.range[0]) + "–" + pct(r.range[1]), r.n, pct(r.mean_confidence), pct(r.observed_accuracy)])),
+      h("p", { class: "muted" }, c.brier_note)];
+    return out;
   }
 
   async function experimentDetail(id) {
@@ -188,7 +220,7 @@
     const out = [h("p", null, h("button", { class: "link", onclick: () => { location.hash = "experiments"; } }, "← All experiments")),
       h("div", { class: "row" }, h("h1", null, "Experiment #" + e.id), statusBadge(e.status)),
       h("p", { class: "muted" }, (e.model_name || "") + " · dataset " + (e.params_json.dataset_id || "?") + " v" + (e.params_json.dataset_version || "?") + " · target " + (cfg.target || "?") +
-        " · " + (m.algorithm === "mlp" ? "neural network " + ((m.model_settings || {}).hidden_layers || []).join("-") + ", " + ((m.model_settings || {}).iterations_used || "?") + " iterations" : (cfg.n_estimators || "?") + " trees, depth " + (cfg.max_depth || "?")) + " · started " + fmt(e.created_at) + " by " + (e.created_by || "—"))];
+        " · " + (m.algorithm === "logistic" ? "logistic regression, C " + ((m.model_settings || {}).C || "?") + ", " + (((m.model_settings || {}).calibration || "none") === "none" ? "no recalibration" : (m.model_settings.calibration + " recalibration")) : m.algorithm === "mlp" ? "neural network " + ((m.model_settings || {}).hidden_layers || []).join("-") + ", " + ((m.model_settings || {}).iterations_used || "?") + " iterations" : (cfg.n_estimators || "?") + " trees, depth " + (cfg.max_depth || "?")) + " · started " + fmt(e.created_at) + " by " + (e.created_by || "—"))];
     if (e.status === "queued" || e.status === "running") {
       out.push(h("div", { class: "notice" }, "Training is running. This page refreshes by itself."));
       poll = setTimeout(() => { if (location.hash.slice(1) === "experiments/" + id) show("experiments/" + id, true); }, 2500);
@@ -221,16 +253,19 @@
       const rows = clsf ? [["Macro F1", "macro_f1"], ["Balanced accuracy", "balanced_accuracy"], ["Accuracy", "accuracy"], ["ROC AUC", "roc_auc"]]
         : [["R²", "r2"], ["RMSE (lower is better)", "rmse"], ["MAE (lower is better)", "mae"]];
       const cvk = clsf ? "Macro F1" : "R²";
-      out.push(h("h2", null, "Neural network vs XGBoost"),
+      const lab = cp.selected.algorithm === "logistic" ? "Logistic regression" : "Neural network";
+      out.push(h("h2", null, lab + " vs XGBoost"),
         h("div", { class: "notice" }, cp.summary),
-        table(["Hold-out test", "Neural network", "XGBoost"], [
+        table(["Hold-out test", lab, "XGBoost"], [
           ...rows.map(([l, k]) => [l, n3(cp.selected.test[k]), n3(cp.xgboost.test[k])]),
           ["Cross-validation " + cvk, n3(cp.selected.cv_mean) + " ± " + n3(cp.selected.cv_sd), n3(cp.xgboost.cv_mean) + " ± " + n3(cp.xgboost.cv_sd)]]),
-        h("p", { class: "muted" }, "Gap in " + cvk + " (neural network minus XGBoost): " + n3(cp.difference) + ", 95% range " + n3(cp.difference_ci95[0]) + " to " + n3(cp.difference_ci95[1]) +
+        h("p", { class: "muted" }, "Gap in " + cvk + " (" + lab.toLowerCase() + " minus XGBoost): " + n3(cp.difference) + ", 95% range " + n3(cp.difference_ci95[0]) + " to " + n3(cp.difference_ci95[1]) +
           ". Both models used the same training rows, folds, class weights and hold-out rows. XGBoost ran with its default settings (" + cp.reference_settings.n_estimators + " trees, depth " +
           cp.reference_settings.max_depth + ", learning rate " + cp.reference_settings.learning_rate + "), not tuned."),
         h("p", { class: "muted" }, cp.caution));
     }
+    if (m.coefficients) out.push(...coefficientSections(m.coefficients));
+    if (m.calibration) out.push(...calibrationSections(m.calibration));
     out.push(h("h2", null, "What the model relied on"), h("p", { class: "muted" }, (m.importance_method === "gain" || !m.importance_method ? "Share of total gain per feature." : "Share of the score lost when each feature is shuffled in the hold-out set (" + m.importance_method + ").") + " This shows what the model used, not what causes the outcome."),
       h("div", { class: "bars" }, (m.feature_importance || []).slice(0, 12).map((f) => h("div", { class: "barrow" }, h("span", null, f.feature),
         h("div", { class: "bar" }, h("i", { style: "width:" + Math.max(1, f.share * 100) + "%" })), h("span", null, pct(f.share))))));
