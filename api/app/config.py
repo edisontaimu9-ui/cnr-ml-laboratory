@@ -14,6 +14,10 @@ class Settings(BaseSettings):
     # Phase 6: outbound reachability check of the CNR API (fixed URL from the environment, never from a request)
     cnr_api_health_path: str = "/"
     cnr_api_timeout_s: float = 5.0
+    # Phase 6 (lab -> CNR): signed model-status events. Off until both are set. The secret must be >= 32 chars and
+    # equal to ML_LAB_WEBHOOK_SECRET on the CNR API.
+    cnr_webhook_url: str = ""
+    cnr_webhook_secret: str = ""
     service_version: str = "0.6.0"
     # Phase 2: dataset ingestion
     dataset_storage_dir: str = "./data/datasets"

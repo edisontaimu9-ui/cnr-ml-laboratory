@@ -51,6 +51,7 @@ An independent machine-learning platform for the Chakudya Nutrition Registry (CN
 - **Admin status and reachability:** `GET /v1/integration/cnr/status` shows whether the CNR address is configured, the active service keys and their last use, deployed models and 24-hour usage. `?probe=true` makes one outbound check of `CNR_API_BASE_URL` (no credentials or data sent, redirects not followed, 6 per minute, audited).
 - **Dashboard:** new **CNR integration** page (admin).
 - **Docs:** [docs/CNR_INTEGRATION.md](docs/CNR_INTEGRATION.md) has the contract and a worked example for the calling side.
+- **Lab -> CNR events:** when a model is deployed, rolled back or withdrawn, the lab sends CNR a signed webhook (`CNR_WEBHOOK_URL`, `CNR_WEBHOOK_SECRET`; HMAC-SHA256, three attempts, audited as `integration.notify`, no patient data). The CNR side is `chakudya-api` v1.83.0: `GET /ml/status`, `GET /ml/models`, `POST /ml/assess/{slug}` and `POST /hooks/ml-lab`.
 - CNR's own nutrition calculations stay in CNR. The lab neither pulls patient records from CNR nor pushes anything to it.
 
 ## Roles

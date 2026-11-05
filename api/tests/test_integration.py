@@ -134,3 +134,108 @@ def test_probe_endpoint_sends_nothing_secret(client, people, monkeypatch):
     monkeypatch.setattr(integ_router, "_probe_limiter", SlidingWindow(1, 60))
     assert client.get("/v1/integration/cnr/status?probe=true", headers=ADMIN).status_code == 200
     assert client.get("/v1/integration/cnr/status?probe=true", headers=ADMIN).status_code == 429
+
+
+# ---------- lab -> CNR events ----------
+from app import webhook                                                    # noqa: E402
+
+SECRET = "w" * 40
+
+
+def _cfg(monkeypatch, url="https://cnr.example/hooks/ml-lab", secret=SECRET, env="development"):
+    s = get_settings()
+    monkeypatch.setattr(s, "cnr_webhook_url", url)
+    monkeypatch.setattr(s, "cnr_webhook_secret", secret)
+    monkeypatch.setattr(s, "environment", env)
+    return s
+
+
+def test_webhook_config_checks(monkeypatch):
+    s = _cfg(monkeypatch, url="")
+    assert "not set" in webhook.config_problem(s)
+    assert "credentials" in webhook.config_problem(_cfg(monkeypatch, url="https://u:p@x.example/h"))
+    assert "https" in webhook.config_problem(_cfg(monkeypatch, url="http://x.example/h", env="production"))
+    assert "32" in webhook.config_problem(_cfg(monkeypatch, secret="short"))
+    assert webhook.config_problem(_cfg(monkeypatch)) is None
+
+
+def test_signature_matches_what_cnr_verifies():
+    import hashlib, hmac
+    body = b'{"a":1}'
+    want = "sha256=" + hmac.new(SECRET.encode(), b"1700000000." + body, hashlib.sha256).hexdigest()
+    assert webhook.sign(SECRET, "1700000000", body) == want
+    assert webhook.sign(SECRET, "1700000001", body) != want          # timestamp is covered, so replays with a new time fail
+
+
+def test_event_holds_no_patient_or_evaluation_data():
+    e = webhook.build_event("withdrawn", "child-malnutrition-risk", 3, 12, reason="withdrawn")
+    assert e["event"] == "model.retired" and e["model"] == {"slug": "child-malnutrition-risk", "version": 3, "version_id": 12}
+    assert set(e) == {"event_id", "event", "occurred_at", "contract", "model", "detail"} and e["detail"] == {"reason": "withdrawn"}
+
+
+def test_emit_is_off_without_config_and_never_blocks(monkeypatch):
+    _cfg(monkeypatch, url="")
+    sent = []
+    monkeypatch.setattr(webhook, "_spawn", lambda fn, *a: sent.append(a))
+    assert webhook.emit("deployed", "m", 1, 1) is False and sent == []
+    _cfg(monkeypatch)
+    assert webhook.emit("deployed", "m", 1, 1) is True and sent[0][0]["event"] == "model.deployed"
+
+
+def test_delivery_retries_then_audits_without_secrets(client, monkeypatch):
+    _cfg(monkeypatch)
+    monkeypatch.setattr(webhook, "_BACKOFF_S", (0, 0))
+    calls = []
+    def fake_post(s, ev):
+        calls.append(ev["event_id"])
+        if len(calls) < 3:
+            raise ConnectionError("down")
+        return 200
+    monkeypatch.setattr(webhook, "_post", fake_post)
+    ev = webhook.build_event("deployed", "child-malnutrition-risk", 1, 1, superseded_version=None)
+    webhook._deliver(ev)
+    assert len(calls) == 3
+    row = next(a for a in client.get("/v1/audit?limit=20", headers=ADMIN).json() if a["action"] == "integration.notify")
+    assert row["detail"]["delivered"] is True and row["detail"]["event"] == "model.deployed"
+    assert SECRET not in json.dumps(row)
+
+
+def test_a_refusal_is_not_retried(client, monkeypatch):
+    _cfg(monkeypatch)
+    monkeypatch.setattr(webhook, "_BACKOFF_S", (0, 0))
+    calls = []
+    monkeypatch.setattr(webhook, "_post", lambda s, ev: calls.append(1) or 401)
+    webhook._deliver(webhook.build_event("withdrawn", "m", 1, 1))
+    assert len(calls) == 1
+    row = next(a for a in client.get("/v1/audit?limit=20", headers=ADMIN).json() if a["action"] == "integration.notify")
+    assert row["detail"]["delivered"] is False and row["detail"]["http_status"] == 401
+
+
+def test_deploy_and_withdraw_queue_events(client, people, monkeypatch):
+    _cfg(monkeypatch)
+    events = []
+    monkeypatch.setattr(webhook, "_spawn", lambda fn, ev: events.append(ev))
+    slug = "food-insecurity-prediction"
+    d = client.post("/v1/datasets", json={"name": "wh-ds"}, headers=ADMIN).json()
+    assert client.post(f"/v1/datasets/{d['id']}/versions", headers=ADMIN, data={"approval_ref": "TEST-WH"},
+                       files={"file": ("t.csv", make_csv(seed=11), "text/csv")}).status_code == 201
+    e = train(client, d["id"], model_slug=slug)
+    assert e["status"] == "completed", e["metrics_json"]
+    v = client.post("/v1/models/versions", json={"experiment_id": e["id"], "intended_use": "Webhook test only; not for clinical use."},
+                    headers=people["ds"]).json()
+    client.post(f"/v1/models/versions/{v['id']}/submit", json={}, headers=people["ds"])
+    assert client.post(f"/v1/models/versions/{v['id']}/approve", json=APPROVE, headers=people["rev"]).status_code == 200
+    assert events == []                                                    # approval alone tells CNR nothing
+    assert client.post(f"/v1/models/versions/{v['id']}/deploy", json={}, headers=ADMIN).status_code == 200
+    assert [x["event"] for x in events] == ["model.deployed"] and events[0]["model"]["slug"] == slug
+    assert client.post(f"/v1/models/versions/{v['id']}/retire", json={"reason": "Webhook tests finished."}, headers=ADMIN).status_code == 200
+    assert [x["event"] for x in events] == ["model.deployed", "model.retired"]
+    assert "Webhook tests" not in json.dumps(events)                       # free-text reasons never leave the lab
+
+
+def test_status_reports_webhook(client, monkeypatch):
+    _cfg(monkeypatch)
+    w = client.get("/v1/integration/cnr/status", headers=ADMIN).json()["webhook"]
+    assert w["configured"] is True and w["host"] == "cnr.example" and SECRET not in json.dumps(w)
+    _cfg(monkeypatch, url="")
+    assert client.get("/v1/integration/cnr/status", headers=ADMIN).json()["webhook"]["configured"] is False

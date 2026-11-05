@@ -27,6 +27,10 @@ services:
         value: https://ml-lab.chakudya.xyz
       - key: CNR_API_BASE_URL
         value: https://api.chakudya.xyz
+      - key: CNR_WEBHOOK_URL
+        value: https://api.chakudya.xyz/hooks/ml-lab
+      - key: CNR_WEBHOOK_SECRET
+        sync: false
   - type: web
     name: cnr-ml-lab-dashboard
     runtime: static

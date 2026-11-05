@@ -1,6 +1,6 @@
 # CNR integration guide (contract `cnr-ml-contract/1`)
 
-For the team that builds the CNR side. CNR calls the laboratory; the lab does not call CNR's data endpoints.
+The link runs both ways. **CNR -> lab:** CNR asks for risk estimates. **Lab -> CNR:** the lab tells CNR when a model is deployed, rolled back or withdrawn. The lab never reads CNR's patient data. CNR's side is implemented in `chakudya-api` v1.83.0 (`src/mlLab.js`): admin routes `GET /ml/status`, `GET /ml/models`, `POST /ml/assess/{slug}` and the receiver `POST /hooks/ml-lab`.
 
 ## Before you start
 - An administrator creates a key with the **service** role (Access page) and gives it to CNR once. Store it as a secret (for a Cloudflare Worker: `wrangler secret put ML_LAB_KEY`). Never put it in client-side code or in a repository.
@@ -61,3 +61,18 @@ async function assess(env, slug, cases, requestId) {
 
 ## Operating it
 Admins see key usage, 24-hour counts and a reachability check under **CNR integration**. Every call is audited as `integration.assess` with counts, model version, request ID and correlation ID, never cases or values.
+
+## Lab -> CNR events (webhook)
+When an administrator deploys, rolls back or withdraws a model, the lab sends one signed `POST` to `CNR_WEBHOOK_URL` (`https://api.chakudya.xyz/hooks/ml-lab`) in the background, so a slow CNR never delays a deploy. Three attempts; a 4xx from CNR is not retried. Each outcome is audited as `integration.notify`.
+
+```json
+{"event_id": "9f1c...", "event": "model.deployed", "occurred_at": "2026-11-05T10:00:00Z", "contract": "cnr-ml-contract/1",
+ "model": {"slug": "child-malnutrition-risk", "version": 2, "version_id": 9}, "detail": {"superseded_version": 1}}
+```
+Events: `model.deployed`, `model.rolled_back`, `model.retired` (only for a version that was being served). No patient data, no evaluation and no free-text reasons are sent.
+
+**Verify every event.** Headers `X-ML-Lab-Timestamp` (unix seconds) and `X-ML-Lab-Signature: sha256=<hex>`, the HMAC-SHA256 of `"<timestamp>.<raw body>"` with the shared secret. Reject a timestamp more than 5 minutes old, compare signatures in constant time, and ignore a repeated `event_id`. The CNR implementation does all four and is tested against the lab's signer.
+
+**Shared secret.** One 32+ character value, set as `CNR_WEBHOOK_SECRET` on the lab and `ML_LAB_WEBHOOK_SECRET` on CNR. Rotate by setting the new value on CNR first, then on the lab.
+
+**An event is a hint, not the truth.** The lab answers 409 whenever nothing is deployed, whatever CNR last heard, so a lost or delayed event is never unsafe.

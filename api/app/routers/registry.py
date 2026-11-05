@@ -3,8 +3,8 @@
 Lifecycle:  candidate -> in_review -> approved | rejected
             approved -> deployed -> retired
 
-"deployed" means *designated as the version to serve*. Nothing is served until
-Phase 5 adds prediction endpoints, which will only ever load the deployed version.
+"deployed" means *designated as the version to serve*; the prediction endpoints (Phase 5) only ever load the
+deployed version. Phase 6 also tells CNR (signed webhook) when a deployed version changes.
 The registry never loads (unpickles) an artifact; it only copies, hashes and compares bytes."""
 import hashlib
 from sqlalchemy.exc import IntegrityError
@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .. import audit, storage
+from .. import audit, storage, webhook
 from ..config import get_settings
 from ..db import get_db
 from ..models import Experiment, ModelDefinition, ModelVersion, utcnow
@@ -116,8 +116,10 @@ def _separate(v: ModelVersion, p: Principal) -> None:
 def _deploy(db: Session, v: ModelVersion, p: Principal, request: Request, note: str, action: str) -> None:
     _verify_artifact(v)
     now = utcnow()
+    replaced = None
     for cur in db.scalars(select(ModelVersion).where(ModelVersion.model_definition_id == v.model_definition_id,
                                                     ModelVersion.status == "deployed")):
+        replaced = cur.version
         cur.status, cur.retired_at = "retired", now
         cur.retired_reason = "rolled back" if action == "rollback" else "superseded"
         _log(cur, "retired", p.name, cur.retired_reason)
@@ -127,6 +129,8 @@ def _deploy(db: Session, v: ModelVersion, p: Principal, request: Request, note: 
     db.commit()
     audit.record(db, "model." + action, principal=p, request=request, resource_type="model_version", resource_id=v.id,
                  detail={"model_definition_id": v.model_definition_id, "version": v.version})
+    d = db.get(ModelDefinition, v.model_definition_id)
+    webhook.emit("rollback" if action == "rollback" else "deployed", d.slug, v.version, v.id, superseded_version=replaced)
 
 
 # ---------- read ----------
@@ -251,11 +255,14 @@ def retire(vid: int, body: RetireVersion, request: Request, p: Principal = Depen
            db: Session = Depends(get_db)):
     v = _get(db, vid)
     _need(v, "approved", "deployed")
+    was_deployed = v.status == "deployed"
     v.status, v.retired_at, v.retired_reason = "retired", utcnow(), "withdrawn: " + body.reason.strip()
     _log(v, "retired", p.name, body.reason)
     _sync_catalog(db, v.model_definition_id)
     db.commit()
     audit.record(db, "model.retired", principal=p, request=request, resource_type="model_version", resource_id=v.id)
+    if was_deployed:        # only a version that was being served matters to CNR
+        webhook.emit("withdrawn", db.get(ModelDefinition, v.model_definition_id).slug, v.version, v.id, reason="withdrawn")
     return _out(db, v, detail=True)
 
 

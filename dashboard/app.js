@@ -212,6 +212,10 @@
       h("h2", null, "CNR API address"),
       c.configured ? h("p", null, c.base_url + c.health_path) : h("div", { class: "notice" }, c.problem + " Set CNR_API_BASE_URL on the API service."),
       h("p", null, probeBtn), probeOut,
+      h("h2", null, "Events sent to CNR"),
+      s.webhook.configured
+        ? h("p", null, "Model deploy, rollback and withdrawal events are sent to " + s.webhook.host + ". Last 24 h: " + s.webhook.last_24h.delivered + " delivered of " + s.webhook.last_24h.attempted + " attempted.")
+        : h("div", { class: "notice" }, s.webhook.problem + " CNR will still learn the truth on each assessment, but will not be told when a model changes."),
       h("h2", null, "Service keys"));
     if (!s.service_keys.length) out.append(empty("No service key yet", "Create a key with the service role under Access and store it only as a secret in CNR."));
     else out.append(table(["Name", "Prefix", "Created", "Last used"], s.service_keys.map((k) => [k.name, k.prefix, fmt(k.created_at), fmt(k.last_used_at)])));

@@ -4,6 +4,7 @@ CNR calls these with a `service` key. They add no new modelling rules: assessmen
 code as /v1/predict (deployed version only, hash check, strict features, rate limit, counts-only audit).
 What they add is a stable contract for CNR: opaque case references echoed back, a correlation ID, and a
 per-case result envelope. Case references and features are never stored or logged."""
+import urllib.parse
 from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -11,7 +12,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from .. import audit, integration, serving
+from .. import audit, integration, serving, webhook
 from ..catalog import SAFETY_NOTICE
 from ..config import get_settings
 from ..db import get_db
@@ -91,12 +92,17 @@ def status(request: Request, probe: bool = False, p: Principal = Depends(require
     keys = db.scalars(select(ApiKey).where(ApiKey.role == "service", ApiKey.revoked_at.is_(None))).all()
     since = utcnow() - timedelta(hours=24)
     count = lambda *w: db.scalar(select(func.count()).select_from(AuditLog).where(AuditLog.ts >= since, *w)) or 0  # noqa: E731
+    notified = db.scalars(select(AuditLog.detail).where(AuditLog.ts >= since, AuditLog.action == "integration.notify")).all()
     deployed = db.scalar(select(func.count()).select_from(ModelVersion).where(ModelVersion.status == "deployed")) or 0
     out = {
         "contract": integration.CONTRACT,
         "cnr_api": {"configured": problem is None, "problem": problem,
                     "base_url": s.cnr_api_base_url if problem is None else None,
                     "health_path": s.cnr_api_health_path},
+        "webhook": {"configured": webhook.config_problem(s) is None, "problem": webhook.config_problem(s),
+                    "host": urllib.parse.urlsplit(s.cnr_webhook_url).hostname if webhook.config_problem(s) is None else None,
+                    "last_24h": {"delivered": sum(1 for d in notified if (d or {}).get("delivered")),
+                                 "attempted": len(notified)}},
         "service_keys": [{"id": k.id, "name": k.name, "prefix": k.prefix, "created_at": k.created_at,
                           "last_used_at": k.last_used_at} for k in keys],
         "deployed_models": deployed,
