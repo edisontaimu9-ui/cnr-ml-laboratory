@@ -1,0 +1,17 @@
+{
+  "name": "CNR Machine Learning Laboratory",
+  "short_name": "CNR ML Lab",
+  "description": "Datasets, experiments and model registry for the CNR Machine Learning Laboratory.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#edf2f3",
+  "theme_color": "#0e5a73",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

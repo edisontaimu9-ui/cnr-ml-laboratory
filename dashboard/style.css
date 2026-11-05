@@ -30,6 +30,7 @@ nav button{text-align:left;background:none;border:0;color:#cfe1e6;padding:.55rem
 nav button[aria-current="page"]{background:var(--lake);color:#fff;font-weight:600}
 .who{margin-top:auto;font-size:.85rem;color:#a9c3ca;display:flex;flex-direction:column;gap:.3rem}
 .who .link{color:#cfe1e6;text-align:left}
+.who #install{font-weight:600}
 main{padding:1.6rem clamp(1rem,3vw,2.2rem);max-width:68rem;width:100%}
 
 .notice{border-left:4px solid var(--maize);background:var(--maize-soft);padding:.7rem 1rem;border-radius:0 6px 6px 0;margin:1rem 0}

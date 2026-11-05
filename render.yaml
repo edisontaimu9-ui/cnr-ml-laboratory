@@ -35,3 +35,10 @@ services:
     name: cnr-ml-lab-dashboard
     runtime: static
     staticPublishPath: ./dashboard
+    headers:
+      - path: /sw.js
+        name: Cache-Control
+        value: no-cache
+      - path: /manifest.webmanifest
+        name: Cache-Control
+        value: no-cache
