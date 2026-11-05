@@ -613,8 +613,45 @@
     return out;
   }
 
+  const syncText = { new_version: "new version", unchanged: "no change", no_data: "no data yet", error: "failed" };
+
+  function syncSection(sy) {
+    const box = h("div"), note = h("p", { class: "muted", role: "status" });
+    const draw = (st) => {
+      const lr = st.last_run;
+      box.replaceChildren(
+        st.configured
+          ? h("p", null, "Pulls " + st.targets.join(", ") + " (last " + st.months + " months) from " + st.source + " every " + st.interval_hours + " h, stores each change as a new dataset version" + (st.run_analysis ? " and runs a hotspot analysis on it." : "."))
+          : h("div", { class: "notice" }, st.problem + " To switch it on, set SURVEILLANCE_SYNC_ENABLED=true and SURVEILLANCE_API_KEY (a CNR admin key) on the API service."),
+        lr ? h("p", { class: "muted" }, "Last run: " + (lr.trigger === "manual" ? "started by an admin" : "scheduled") + ", " + (lr.state === "running" ? "running now" : lr.state.replace(/_/g, " ")) + (lr.finished_at ? " at " + fmt(lr.finished_at) : "") + (lr.error ? ". " + lr.error : "") + ".") : null,
+        lr && lr.results && lr.results.length
+          ? table(["Group", "Indicator", "Result", "Dataset version", "Hotspot analysis"], lr.results.map((r) => [r.population_group, r.indicator,
+              (syncText[r.status] || r.status) + (r.error ? ": " + r.error : r.note ? ": " + r.note : ""), r.version ? "v" + r.version : "—",
+              r.analysis ? (r.analysis_id ? h("button", { class: "link", onclick: () => { location.hash = "hotspots/" + r.analysis_id; } }, r.analysis) : r.analysis) : "—"]))
+          : null);
+    };
+    const btn = h("button", { class: "primary", disabled: !sy.configured, onclick: async () => {
+      btn.disabled = true; note.textContent = "Starting…";
+      try {
+        await api("/v1/sync/surveillance/run", { method: "POST" });
+        for (let i = 0; i < 40; i++) {
+          await new Promise((r) => setTimeout(r, 3000));
+          const st = await api("/v1/sync/surveillance");
+          draw(st);
+          if (!st.running) break;
+          note.textContent = "Syncing…";
+        }
+        note.textContent = "Done.";
+      } catch (e) { note.textContent = e.message; }
+      finally { btn.disabled = !sy.configured; }
+    } }, "Sync now");
+    draw(sy);
+    return h("div", null, h("h2", null, "Surveillance sync from CNR"), box, h("p", null, btn), note);
+  }
+
   async function integrationPage() {
     const s = await api("/v1/integration/cnr/status");
+    const sy = await api("/v1/sync/surveillance").catch(() => null);
     const out = h("div"), probeOut = h("p", { class: "muted", role: "status" });
     const c = s.cnr_api;
     const probeBtn = h("button", { class: "primary", disabled: !c.configured, onclick: async () => {
@@ -638,6 +675,7 @@
         ? h("p", null, "Model deploy, rollback and withdrawal events are sent to " + s.webhook.host + ". Last 24 h: " + s.webhook.last_24h.delivered + " delivered of " + s.webhook.last_24h.attempted + " attempted.")
         : h("div", { class: "notice" }, s.webhook.problem + " CNR will still learn the truth on each assessment, but will not be told when a model changes."),
       h("h2", null, "Service keys"));
+    if (sy) out.append(syncSection(sy));
     if (!s.service_keys.length) out.append(empty("No service key yet", "Create a key with the service role under Access and store it only as a secret in CNR."));
     else out.append(table(["Name", "Prefix", "Created", "Last used"], s.service_keys.map((k) => [k.name, k.prefix, fmt(k.created_at), fmt(k.last_used_at)])));
     if (!s.deployed_models) out.append(h("div", { class: "notice" }, "No model is deployed, so CNR assessments are refused with a clear message."));

@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -6,11 +7,12 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select
 
+from . import surveillance_sync
 from .catalog import CATALOG, LABEL_NOTE
 from .config import get_settings
 from .db import Base, SessionLocal, add_missing_columns, engine
 from .models import ApiKey, Exploration, Experiment, HotspotAnalysis, ModelDefinition, utcnow
-from .routers import admin, core, datasets, experiments, explorations, hotspots, integration, predict, registry
+from .routers import admin, core, datasets, experiments, explorations, hotspots, integration, predict, registry, sync
 from .security import hash_key
 
 log = logging.getLogger("cnr-ml")
@@ -58,7 +60,12 @@ async def lifespan(_: FastAPI):
     add_missing_columns()
     _seed()
     _fail_interrupted()
-    yield
+    task = asyncio.create_task(surveillance_sync.scheduler(settings)) if surveillance_sync.config_problem(settings) is None else None
+    try:
+        yield
+    finally:
+        if task is not None:
+            task.cancel()
 
 
 app = FastAPI(
@@ -102,4 +109,5 @@ app.include_router(hotspots.router)
 app.include_router(registry.router)
 app.include_router(predict.router)
 app.include_router(integration.router)
+app.include_router(sync.router)
 app.include_router(admin.router)

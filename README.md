@@ -51,6 +51,15 @@ You can upload and de-identify datasets, train and evaluate models, review and a
 - **Endpoints:** `POST /v1/hotspots`, `GET /v1/hotspots`, `GET /v1/hotspots/{id}`. Reading needs `read:hotspots` (viewer, data scientist, clinical reviewer, admin); starting one needs `write:hotspots` (data scientist, admin). One training run, exploration or analysis runs at a time.
 - **Dashboard:** a **Hotspots** page marked *aggregated analysis · never deployed*, with a schematic map of area centres, the hotspot table, the observed and fitted trend, the spatial verdict and a table of all areas.
 
+## Automatic surveillance sync (CNR to laboratory)
+- **What it does:** every `SURVEILLANCE_SYNC_INTERVAL_HOURS` (default 24) the API fetches CNR's `GET /surveillance/export` (district-by-month counts: examined, cases, severe cases) for each target in `SURVEILLANCE_SYNC_TARGETS`, stores the CSV as a new de-identified dataset version through the normal upload pipeline, and runs a hotspot analysis on it (`district`, `cases`, `examined`, `month`). One dataset per target, named `cnr-surveillance-<group>-<indicator>`.
+- **Aggregates only:** CNR already leaves out cells under its minimum size. Datasets are marked `internal`; nothing individual is pulled.
+- **Quiet when nothing changed:** an identical export (same SHA-256) makes no new version and no new analysis. If a run was skipped because a training run, exploration or analysis was busy, the analysis is done at the next sync.
+- **Safe by design:** the CNR address comes only from `CNR_API_BASE_URL`; redirects are refused; the key (`SURVEILLANCE_API_KEY`, a CNR admin key) is sent only as a Bearer header to that address and never logged, audited or shown. Off until `SURVEILLANCE_SYNC_ENABLED=true` and the key is set.
+- **Endpoints (admin):** `GET /v1/sync/surveillance` (settings, last run per target), `POST /v1/sync/surveillance/run` (sync now, 202). Audited as `surveillance_sync.started` and `surveillance_sync.completed`.
+- **Dashboard:** a **Surveillance sync from CNR** section on the CNR integration page with the last run and a *Sync now* button.
+- **Needs:** the CNR API with `GET /surveillance/export` deployed, and an always-on API service (the schedule runs inside the API; the first run is 2 minutes after start).
+
 ## Model registry
 - **Registry:** a completed experiment can be registered as an immutable model version. The model file is copied, hashed (SHA-256) and the evaluation is frozen with it, together with the written intended use.
 - **Review gate:** `candidate → in review → approved | rejected`. Approval needs a clinical reviewer, a reference to the external validation evidence, written review notes and, when the evaluation carries warnings, an explicit acknowledgement. Rejection is final for that version.
@@ -79,7 +88,7 @@ You can upload and de-identify datasets, train and evaluate models, review and a
 - **Dashboard:** new **CNR integration** page (admin).
 - **Docs:** [docs/CNR_INTEGRATION.md](docs/CNR_INTEGRATION.md) has the contract and a worked example for the calling side.
 - **Lab -> CNR events:** when a model is deployed, rolled back or withdrawn, the lab sends CNR a signed webhook (`CNR_WEBHOOK_URL`, `CNR_WEBHOOK_SECRET`; HMAC-SHA256, three attempts, audited as `integration.notify`, no patient data). The CNR side is `chakudya-api` v1.83.0: `GET /ml/status`, `GET /ml/models`, `POST /ml/assess/{slug}` and `POST /hooks/ml-lab`.
-- CNR's own nutrition calculations stay in CNR. The lab neither pulls patient records from CNR nor pushes anything to it.
+- CNR's own nutrition calculations stay in CNR. The lab pulls no patient records from CNR, only aggregated surveillance counts (see *Automatic surveillance sync*), and pushes it nothing except signed model-status events.
 
 ## Roles
 | Role | Can |

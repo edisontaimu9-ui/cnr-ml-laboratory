@@ -18,6 +18,8 @@ The CNR integration needs no extra service, disk or SQL. Steps: (1) create a **s
 
 To rotate the key, create a new service key, update CNR's secret, then revoke the old one.
 
+**Automatic surveillance sync.** To feed the hotspot analysis from CNR without uploading files: deploy the CNR API with `GET /surveillance/export` (`npx wrangler deploy`), then on Render set `SURVEILLANCE_API_KEY` to a CNR admin key (`SURVEILLANCE_SYNC_ENABLED` is already `true` in `render.yaml`; `CNR_API_BASE_URL` is the CNR address). Redeploy, open **CNR integration** and press *Sync now* under *Surveillance sync from CNR*. Targets, window and interval are `SURVEILLANCE_SYNC_TARGETS`, `SURVEILLANCE_SYNC_MONTHS` and `SURVEILLANCE_SYNC_INTERVAL_HOURS`.
+
 ## 3. Cloudflare DNS
 Add CNAME records (proxied): `ml` → your API's `*.onrender.com` host, `ml-lab` → the dashboard's `*.onrender.com` host. Add the same custom domains in each Render service's Settings → Custom Domains.
 

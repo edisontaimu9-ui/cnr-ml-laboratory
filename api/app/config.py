@@ -18,7 +18,19 @@ class Settings(BaseSettings):
     # equal to ML_LAB_WEBHOOK_SECRET on the CNR API.
     cnr_webhook_url: str = ""
     cnr_webhook_secret: str = ""
-    service_version: str = "0.7.0"
+    # CNR -> lab: automatic pull of district-by-month surveillance counts (GET {CNR_API_BASE_URL}/surveillance/export).
+    # Off until enabled AND the key is set. The key is an admin key of the CNR API; it is only ever sent to CNR_API_BASE_URL.
+    surveillance_sync_enabled: bool = False
+    surveillance_api_key: str = ""
+    surveillance_sync_interval_hours: float = 24.0
+    surveillance_sync_months: int = 12
+    # "population_group:indicator" pairs, comma separated. One dataset (and one hotspot analysis) per pair.
+    surveillance_sync_targets: str = "under5:stunting,under5:wasting,under5:acute_malnutrition"
+    surveillance_sync_run_analysis: bool = True
+    surveillance_sync_approval_ref: str = "CNR surveillance aggregate export (automatic)"
+    surveillance_fetch_timeout_s: float = 60.0
+    surveillance_fetch_max_mb: int = 5
+    service_version: str = "0.8.0"
     # Dataset ingestion
     dataset_storage_dir: str = "./data/datasets"
     pseudonym_key: str = ""          # >= 32 chars; enables the "pseudonymise" action

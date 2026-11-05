@@ -21,7 +21,7 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
     # Machine key for the CNR integration: can list the catalogue and call predictions, nothing else.
     "service": {"read:catalog", "read:models", "predict:models"},
     "admin": _VIEW | {"write:datasets", "write:experiments", "write:explorations", "write:hotspots", "read:dataset_rows", "write:models", "approve:models",
-                      "read:audit", "manage:keys", "deploy:models", "predict:models", "read:integration"},
+                      "read:audit", "manage:keys", "deploy:models", "predict:models", "read:integration", "manage:sync"},
 }
 
 

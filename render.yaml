@@ -31,6 +31,10 @@ services:
         value: https://api.chakudya.xyz/hooks/ml-lab
       - key: CNR_WEBHOOK_SECRET
         sync: false
+      - key: SURVEILLANCE_SYNC_ENABLED
+        value: "true"
+      - key: SURVEILLANCE_API_KEY
+        sync: false
   - type: web
     name: cnr-ml-lab-dashboard
     runtime: static
