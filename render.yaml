@@ -26,7 +26,7 @@ services:
       - key: CORS_ORIGINS
         value: https://ml-lab.chakudya.xyz
       - key: CNR_API_BASE_URL
-        value: https://chakudya-api.edisontaimu9.workers.dev
+        value: https://api.chakudya.xyz
   - type: web
     name: cnr-ml-lab-dashboard
     runtime: static
