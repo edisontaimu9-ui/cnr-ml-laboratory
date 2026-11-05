@@ -27,8 +27,12 @@ def _summary(e: Experiment) -> dict:
         return {}
     t, b = m.get("test", {}), m.get("baseline", {})
     key = "macro_f1" if m.get("task") == "classification" else "r2"
-    return {"task": m.get("task"), "metric": key, "test": t.get(key), "baseline": b.get(key),
-            "warnings": len(m.get("warnings", []))}
+    out = {"task": m.get("task"), "metric": key, "test": t.get(key), "baseline": b.get(key),
+           "warnings": len(m.get("warnings", [])), "algorithm": m.get("algorithm", "xgboost")}
+    c = m.get("comparison")
+    if c:
+        out["vs_xgboost"] = {"difference": c.get("difference"), "verdict": c.get("verdict")}
+    return out
 
 
 def _out(db: Session, e: Experiment, detail: bool = False) -> dict:
@@ -76,15 +80,18 @@ def create_experiment(body: ExperimentCreate, request: Request, background: Back
     cfg = training.Config(target=body.target, task=d.task_type, features=body.features, exclude=body.exclude,
                           test_size=body.test_size, seed=body.seed, n_estimators=body.n_estimators,
                           max_depth=body.max_depth, learning_rate=body.learning_rate,
-                          balance_classes=body.balance_classes)
-    e = Experiment(model_definition_id=d.id, dataset_version_id=v.id, framework="xgboost", status="queued",
+                          balance_classes=body.balance_classes, algorithm=body.algorithm,
+                          hidden_layers=body.hidden_layers, alpha=body.alpha, max_iter=body.max_iter,
+                          compare_xgboost=body.compare_xgboost)
+    e = Experiment(model_definition_id=d.id, dataset_version_id=v.id, framework=body.algorithm, status="queued",
                    params_json={"config": asdict(cfg), "dataset_id": v.dataset_id, "dataset_version": v.version,
                                 "model_slug": d.slug},
                    git_commit=(os.environ.get("RENDER_GIT_COMMIT") or "")[:40] or None, created_by=p.name)
     db.add(e)
     db.commit()
     audit.record(db, "experiment.created", principal=p, request=request, resource_type="experiment", resource_id=e.id,
-                 detail={"model": d.slug, "dataset": v.dataset_id, "version": v.version, "target": body.target})
+                 detail={"model": d.slug, "dataset": v.dataset_id, "version": v.version, "target": body.target,
+                             "algorithm": body.algorithm})
     background.add_task(run_experiment, e.id)
     return _out(db, e, detail=True)
 

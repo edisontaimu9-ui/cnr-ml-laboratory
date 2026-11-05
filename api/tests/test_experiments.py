@@ -132,3 +132,82 @@ def test_no_signal_is_called_out(client):
     b = e["metrics_json"]["baseline"]
     assert b["macro_f1"] >= max(b["majority_macro_f1"], b["chance_macro_f1"]) - 1e-9 and b["chance_macro_f1"] > 0.4
     assert any("does not clearly beat the baseline" in w for w in e["metrics_json"]["warnings"])
+
+
+# ---- neural network (MLP) and the comparison against XGBoost ----
+
+MLP = {"algorithm": "mlp", "hidden_layers": [16, 8], "max_iter": 150}
+
+
+def test_default_run_is_xgboost_without_comparison(client, ds):
+    e = train(client, ds)
+    assert e["framework"] == "xgboost" and e["metrics_json"]["algorithm"] == "xgboost"
+    assert "comparison" not in e["metrics_json"] and e["metrics_json"]["importance_method"] == "gain"
+    assert e["summary"]["algorithm"] == "xgboost" and "vs_xgboost" not in e["summary"]
+
+
+def test_mlp_classification_compares_against_xgboost(client, ds):
+    e = train(client, ds, **MLP)
+    assert e["status"] == "completed", e["metrics_json"]
+    m = e["metrics_json"]
+    assert e["framework"] == "mlp" and m["algorithm"] == "mlp" and m["model_settings"]["hidden_layers"] == [16, 8]
+    assert m["importance_method"].startswith("permutation") and m["feature_importance"][0]["feature"] in ("age", "weight", "district")
+    c = m["comparison"]
+    assert c["reference"] == "xgboost" and c["same_split"] and c["metric"] == "macro_f1" and c["reference_settings"]["tuned"] is False
+    assert c["selected"]["test"]["macro_f1"] == m["test"]["macro_f1"]          # the headline is the selected model's own score
+    assert {"macro_f1", "balanced_accuracy", "accuracy", "roc_auc"} <= set(c["xgboost"]["test"])
+    lo, hi = c["difference_ci95"]
+    assert lo <= hi and abs(c["difference"] - (c["selected"]["test"]["macro_f1"] - c["xgboost"]["test"]["macro_f1"])) < 1e-3
+    assert c["verdict"] in ("mlp_better", "xgboost_better", "no_clear_difference") and c["summary"] and c["caution"]
+    assert c["caution"] in m["limitations"] and any("Neural networks" in x for x in m["limitations"])
+    assert any("Only" in w and "Neural networks are unstable" in w for w in m["warnings"])          # 192 training rows
+    assert e["summary"]["algorithm"] == "mlp" and e["summary"]["vs_xgboost"]["verdict"] == c["verdict"]
+    assert storage.exists(m["artifact_uri"])
+
+
+def test_mlp_comparison_is_reproducible_and_optional(client, ds):
+    a, b = train(client, ds, **MLP)["metrics_json"], train(client, ds, **MLP)["metrics_json"]
+    assert a["test"] == b["test"] and a["comparison"] == b["comparison"]
+    off = train(client, ds, compare_xgboost=False, **MLP)["metrics_json"]
+    assert "comparison" not in off and off["test"] == a["test"]
+    assert not any("Choosing the higher-scoring" in x for x in off["limitations"])
+
+
+def test_mlp_regression_run(client, ds):
+    e = train(client, ds, model_slug="nutritional-outcome-prediction", target="score", exclude=["muac", "rare", "status"], **MLP)
+    assert e["status"] == "completed", e["metrics_json"]
+    m = e["metrics_json"]
+    assert m["test"]["r2"] > m["baseline"]["r2"] and m["comparison"]["metric"] == "r2"
+    assert {"r2", "rmse", "mae"} <= set(m["comparison"]["xgboost"]["test"])
+
+
+def test_mlp_input_is_validated(client, ds):
+    body = {"model_slug": "diabetes-risk", "dataset_id": ds, "target": "status", "algorithm": "mlp"}
+    for bad in ({"algorithm": "svm"}, {"hidden_layers": []}, {"hidden_layers": [8, 8, 8, 8]}, {"hidden_layers": [1]},
+                {"hidden_layers": [1000]}, {"max_iter": 5}, {"alpha": -1}):
+        assert client.post("/v1/experiments", json={**body, **bad}, headers=ADMIN).status_code == 422, bad
+
+
+def test_mlp_bundle_serves_with_missing_and_unseen_values(client, ds):
+    import io
+
+    import joblib
+
+    from app import serving
+    m = train(client, ds, **MLP)["metrics_json"]
+    bundle = joblib.load(io.BytesIO(storage.load_bytes(m["artifact_uri"])))
+    out = serving.predict(bundle, [{"age": 20, "weight": 9.1, "district": "Zomba"}, {"age": 30, "district": "Unknownville"}, {"weight": 8.0}])
+    assert len(out) == 3 and all(abs(sum(o["probabilities"].values()) - 1) < 1e-3 for o in out)
+    assert set(serving.categories(bundle)["district"]) == {"Blantyre", "Mangochi", "Zomba"}
+
+
+def test_mlp_experiment_can_be_registered_with_its_comparison_frozen(client, ds):
+    # its own slug, so the version numbers other test modules rely on are not disturbed
+    e = train(client, ds, model_slug="ckd-nutrition-risk", **MLP)
+    assert e["status"] == "completed", e["metrics_json"]
+    r = client.post("/v1/models/versions", headers=ADMIN, json={
+        "experiment_id": e["id"], "intended_use": "Research use only, to test the registry with a neural network run."})
+    assert r.status_code == 201, r.text
+    v = client.get(f"/v1/models/versions/{r.json()['id']}", headers=ADMIN).json()
+    assert v["metrics_json"]["algorithm"] == "mlp" and v["metrics_json"]["comparison"]["reference"] == "xgboost"
+    assert v["headline"]["metric"] == "macro_f1" and v["artifact_sha256"]

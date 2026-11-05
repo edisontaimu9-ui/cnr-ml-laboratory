@@ -98,6 +98,7 @@
   let poll = null;
   const pct = (x) => (x == null ? "—" : (100 * x).toFixed(1) + "%");
   const n3 = (x) => (x == null ? "—" : String(x));
+  const verdictShort = (v) => (v === "mlp_better" ? "ahead of XGBoost" : v === "xgboost_better" ? "behind XGBoost" : "no clear gap to XGBoost");
   const statusBadge = (st) => h("span", { class: "badge " + (st === "failed" ? "bad" : st === "completed" ? "" : "planned") }, st);
 
   async function experiments(arg) {
@@ -105,10 +106,10 @@
     if (arg) return experimentDetail(Number(arg));
     const rows = await api("/v1/experiments");
     return [h("h1", null, "Experiments"),
-      h("p", null, "Each run trains an XGBoost model on a de-identified dataset version and reports honest hold-out results next to a trivial baseline."),
+      h("p", null, "Each run trains an XGBoost model or a neural network (MLP) on a de-identified dataset version and reports honest hold-out results next to a trivial baseline. A neural network run can also be compared against XGBoost on the same split."),
       can("write:experiments") ? h("p", null, h("button", { class: "primary", onclick: () => { location.hash = "experiments/new"; } }, "New experiment")) : null,
-      rows.length ? table(["#", "Model", "Status", "Result vs baseline", "By", "Started", ""], rows.map((r) => [r.id, r.model_slug || "—", statusBadge(r.status),
-        r.summary && r.summary.test != null ? r.summary.metric + " " + n3(r.summary.test) + " vs " + n3(r.summary.baseline) : (r.summary && r.summary.error ? "failed" : "—"),
+      rows.length ? table(["#", "Model", "Status", "Result vs baseline", "By", "Started", ""], rows.map((r) => [r.id, (r.model_slug || "—") + (r.summary && r.summary.algorithm === "mlp" ? " (neural network)" : ""), statusBadge(r.status),
+        r.summary && r.summary.test != null ? r.summary.metric + " " + n3(r.summary.test) + " vs " + n3(r.summary.baseline) + (r.summary.vs_xgboost ? " (" + verdictShort(r.summary.vs_xgboost.verdict) + ")" : "") : (r.summary && r.summary.error ? "failed" : "—"),
         r.created_by || "—", fmt(r.created_at), h("button", { class: "link", onclick: () => { location.hash = "experiments/" + r.id; } }, "Open")]))
       : empty("No experiments yet", can("write:experiments") ? "Upload a dataset version first, then start an experiment." : "A data scientist or admin can start the first experiment.")];
   }
@@ -127,6 +128,14 @@
     const num = (id, v, min, max, step) => h("input", { id, type: "number", value: v, min, max, step: step || 1 });
     const trees = num("xn", 200, 10, 1000), depth = num("xdp", 4, 1, 10), lr = num("xlr", 0.1, 0.01, 0.5, 0.01), tsz = num("xts", 0.2, 0.1, 0.4, 0.05), seed = num("xs", 42, 0, 2147483647);
     const bal = h("input", { id: "xb", type: "checkbox", checked: true });
+    const algo = h("select", { id: "xa" }, [h("option", { value: "xgboost" }, "XGBoost (gradient-boosted trees)"), h("option", { value: "mlp" }, "Neural network (MLP)")]);
+    const layers = h("input", { id: "xl", type: "text", value: "64,32", maxlength: 20, inputmode: "numeric" });
+    const alpha = num("xal", 0.001, 0.000001, 1, 0.0001), iters = num("xit", 500, 50, 1000, 50);
+    const cmp = h("input", { id: "xc", type: "checkbox", checked: true });
+    const xgbBox = h("div", { class: "form3" }, field("Trees", trees, "xn"), field("Max depth", depth, "xdp"), field("Learning rate", lr, "xlr"));
+    const mlpBox = h("div", { class: "form3", hidden: true }, field("Hidden layers (sizes, comma separated, up to 3)", layers, "xl"), field("Weight penalty (alpha)", alpha, "xal"),
+      field("Max iterations", iters, "xit"), h("div", null, h("label", { for: "xc" }, "Compare against XGBoost"), cmp));
+    algo.addEventListener("change", () => { xgbBox.hidden = algo.value === "mlp"; mlpBox.hidden = algo.value !== "mlp"; });
     const cols = () => (versions.find((v) => String(v.version) === ver.value) || { schema_info: { columns: [] } }).schema_info.columns || [];
     const drawCols = () => {
       const prev = target.value, names = cols().map((c) => c.name);
@@ -147,11 +156,16 @@
       err.textContent = "";
       if (!model.value) { err.textContent = "Choose a model."; return; }
       if (!target.value) { err.textContent = "Choose the column to predict."; return; }
+      const sizes = layers.value.split(",").map((x) => x.trim()).filter(Boolean).map(Number);
+      if (algo.value === "mlp" && (!sizes.length || sizes.length > 3 || sizes.some((n) => !Number.isInteger(n) || n < 2 || n > 256))) {
+        err.textContent = "Hidden layers must be 1 to 3 whole numbers between 2 and 256, for example 64,32."; return;
+      }
       go.disabled = true;
       try {
         const body = { model_slug: model.value, dataset_id: Number(dset.value), version: Number(ver.value), target: target.value,
           exclude: [...excl.querySelectorAll("input:checked")].map((i) => i.value), n_estimators: Number(trees.value), max_depth: Number(depth.value),
-          learning_rate: Number(lr.value), test_size: Number(tsz.value), seed: Number(seed.value), balance_classes: bal.checked };
+          learning_rate: Number(lr.value), test_size: Number(tsz.value), seed: Number(seed.value), balance_classes: bal.checked,
+          algorithm: algo.value, hidden_layers: sizes.length ? sizes : [64, 32], alpha: Number(alpha.value), max_iter: Number(iters.value), compare_xgboost: cmp.checked };
         const e = await api("/v1/experiments", { method: "POST", body: JSON.stringify(body) });
         location.hash = "experiments/" + e.id;
       } catch (e) { err.textContent = e.message; go.disabled = false; }
@@ -161,7 +175,8 @@
       h("div", { class: "form3" }, field("Model", model, "xm"), field("Dataset", dset, "xd"), field("Version", ver, "xv"), field("Target column (what to predict)", target, "xt")),
       h("label", null, "Columns to leave out of training"), excl,
       h("details", { class: "card" }, h("summary", null, "Training settings"),
-        h("div", { class: "form3" }, field("Trees", trees, "xn"), field("Max depth", depth, "xdp"), field("Learning rate", lr, "xlr"), field("Test share", tsz, "xts"), field("Random seed", seed, "xs"),
+        h("div", { class: "form3" }, field("Algorithm", algo, "xa")), xgbBox, mlpBox,
+        h("div", { class: "form3" }, field("Test share", tsz, "xts"), field("Random seed", seed, "xs"),
           h("div", null, h("label", { for: "xb" }, "Balance classes"), bal))),
       go, err];
   }
@@ -172,7 +187,7 @@
     const out = [h("p", null, h("button", { class: "link", onclick: () => { location.hash = "experiments"; } }, "← All experiments")),
       h("div", { class: "row" }, h("h1", null, "Experiment #" + e.id), statusBadge(e.status)),
       h("p", { class: "muted" }, (e.model_name || "") + " · dataset " + (e.params_json.dataset_id || "?") + " v" + (e.params_json.dataset_version || "?") + " · target " + (cfg.target || "?") +
-        " · " + (cfg.n_estimators || "?") + " trees, depth " + (cfg.max_depth || "?") + " · started " + fmt(e.created_at) + " by " + (e.created_by || "—"))];
+        " · " + (m.algorithm === "mlp" ? "neural network " + ((m.model_settings || {}).hidden_layers || []).join("-") + ", " + ((m.model_settings || {}).iterations_used || "?") + " iterations" : (cfg.n_estimators || "?") + " trees, depth " + (cfg.max_depth || "?")) + " · started " + fmt(e.created_at) + " by " + (e.created_by || "—"))];
     if (e.status === "queued" || e.status === "running") {
       out.push(h("div", { class: "notice" }, "Training is running. This page refreshes by itself."));
       poll = setTimeout(() => { if (location.hash.slice(1) === "experiments/" + id) show("experiments/" + id, true); }, 2500);
@@ -199,7 +214,23 @@
           stat("Baseline RMSE", n3(b.rmse), b.strategy), stat("MAE", n3(t.mae))),
         h("p", { class: "muted" }, "Cross-validation (" + cv.folds + " folds): R² " + n3(cv.r2_mean) + " ± " + n3(cv.r2_sd) + ", RMSE " + n3(cv.rmse_mean) + " ± " + n3(cv.rmse_sd) + "."));
     }
-    out.push(h("h2", null, "What the model relied on"), h("p", { class: "muted" }, "Share of total gain per feature. This shows what the model used, not what causes the outcome."),
+    const cp = m.comparison;
+    if (cp) {
+      const clsf = m.task === "classification";
+      const rows = clsf ? [["Macro F1", "macro_f1"], ["Balanced accuracy", "balanced_accuracy"], ["Accuracy", "accuracy"], ["ROC AUC", "roc_auc"]]
+        : [["R²", "r2"], ["RMSE (lower is better)", "rmse"], ["MAE (lower is better)", "mae"]];
+      const cvk = clsf ? "Macro F1" : "R²";
+      out.push(h("h2", null, "Neural network vs XGBoost"),
+        h("div", { class: "notice" }, cp.summary),
+        table(["Hold-out test", "Neural network", "XGBoost"], [
+          ...rows.map(([l, k]) => [l, n3(cp.selected.test[k]), n3(cp.xgboost.test[k])]),
+          ["Cross-validation " + cvk, n3(cp.selected.cv_mean) + " ± " + n3(cp.selected.cv_sd), n3(cp.xgboost.cv_mean) + " ± " + n3(cp.xgboost.cv_sd)]]),
+        h("p", { class: "muted" }, "Gap in " + cvk + " (neural network minus XGBoost): " + n3(cp.difference) + ", 95% range " + n3(cp.difference_ci95[0]) + " to " + n3(cp.difference_ci95[1]) +
+          ". Both models used the same training rows, folds, class weights and hold-out rows. XGBoost ran with its default settings (" + cp.reference_settings.n_estimators + " trees, depth " +
+          cp.reference_settings.max_depth + ", learning rate " + cp.reference_settings.learning_rate + "), not tuned."),
+        h("p", { class: "muted" }, cp.caution));
+    }
+    out.push(h("h2", null, "What the model relied on"), h("p", { class: "muted" }, (m.importance_method === "gain" || !m.importance_method ? "Share of total gain per feature." : "Share of the score lost when each feature is shuffled in the hold-out set (" + m.importance_method + ").") + " This shows what the model used, not what causes the outcome."),
       h("div", { class: "bars" }, (m.feature_importance || []).slice(0, 12).map((f) => h("div", { class: "barrow" }, h("span", null, f.feature),
         h("div", { class: "bar" }, h("i", { style: "width:" + Math.max(1, f.share * 100) + "%" })), h("span", null, pct(f.share))))));
     out.push(h("h2", null, "Limits of this result"), h("ul", { class: "plain" }, (m.limitations || []).map((x) => h("li", null, x))),
