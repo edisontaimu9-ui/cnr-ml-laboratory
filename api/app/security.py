@@ -13,14 +13,14 @@ from .ratelimit import SlidingWindow
 from .db import get_db
 from .models import ApiKey, utcnow
 
-_VIEW = {"read:catalog", "read:models", "read:experiments", "read:datasets"}
+_VIEW = {"read:catalog", "read:models", "read:experiments", "read:datasets", "read:explorations"}
 ROLE_PERMISSIONS: dict[str, set[str]] = {
     "viewer": _VIEW,
-    "data_scientist": _VIEW | {"write:datasets", "write:experiments", "read:dataset_rows", "write:models", "predict:models"},
+    "data_scientist": _VIEW | {"write:datasets", "write:experiments", "write:explorations", "read:dataset_rows", "write:models", "predict:models"},
     "clinical_reviewer": _VIEW | {"approve:models", "read:audit", "predict:models"},
     # Machine key for the CNR integration: can list the catalogue and call predictions, nothing else.
     "service": {"read:catalog", "read:models", "predict:models"},
-    "admin": _VIEW | {"write:datasets", "write:experiments", "read:dataset_rows", "write:models", "approve:models",
+    "admin": _VIEW | {"write:datasets", "write:experiments", "write:explorations", "read:dataset_rows", "write:models", "approve:models",
                       "read:audit", "manage:keys", "deploy:models", "predict:models", "read:integration"},
 }
 

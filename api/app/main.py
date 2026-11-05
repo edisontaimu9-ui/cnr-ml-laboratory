@@ -9,8 +9,8 @@ from sqlalchemy import select
 from .catalog import CATALOG, LABEL_NOTE
 from .config import get_settings
 from .db import Base, SessionLocal, add_missing_columns, engine
-from .models import ApiKey, Experiment, ModelDefinition, utcnow
-from .routers import admin, core, datasets, experiments, integration, predict, registry
+from .models import ApiKey, Exploration, Experiment, ModelDefinition, utcnow
+from .routers import admin, core, datasets, experiments, explorations, integration, predict, registry
 from .security import hash_key
 
 log = logging.getLogger("cnr-ml")
@@ -43,6 +43,9 @@ def _fail_interrupted() -> None:
         for e in db.scalars(select(Experiment).where(Experiment.status.in_(["queued", "running"]))):
             e.status, e.finished_at = "failed", utcnow()
             e.metrics_json = {"error": "Interrupted by a service restart. Start it again."}
+        for x in db.scalars(select(Exploration).where(Exploration.status.in_(["queued", "running"]))):
+            x.status, x.finished_at = "failed", utcnow()
+            x.results_json = {"error": "Interrupted by a service restart. Start it again."}
         db.commit()
 
 
@@ -91,6 +94,7 @@ async def security_headers(request, call_next):
 app.include_router(core.router)
 app.include_router(datasets.router)
 app.include_router(experiments.router)
+app.include_router(explorations.router)
 app.include_router(registry.router)
 app.include_router(predict.router)
 app.include_router(integration.router)

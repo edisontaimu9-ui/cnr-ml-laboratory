@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, PlainSerializer
+from pydantic import BaseModel, ConfigDict, Field, PlainSerializer, model_validator
 
 
 def _iso(d: datetime | None) -> str | None:
@@ -112,6 +112,47 @@ class ExperimentCreate(BaseModel):
     alpha: float = Field(default=1e-3, ge=1e-6, le=1.0)
     max_iter: int = Field(default=500, ge=50, le=1000)
     compare_xgboost: bool = True
+
+
+class ExplorationCreate(BaseModel):
+    """Unsupervised analysis. There is no target and no model slug: an exploration is not tied to a catalogue model."""
+    dataset_id: int
+    version: int | None = None
+    features: list[str] | None = Field(default=None, max_length=300)
+    exclude: list[str] = Field(default_factory=list, max_length=300)
+    methods: list[Literal["clustering", "anomaly"]] = Field(default_factory=lambda: ["clustering", "anomaly"], min_length=1, max_length=2)
+    k: int | None = Field(default=None, ge=2, le=12)           # fix the number of groups instead of searching
+    k_min: int = Field(default=2, ge=2, le=12)
+    k_max: int = Field(default=8, ge=2, le=12)
+    flag_share: float = Field(default=0.05, ge=0.005, le=0.2)  # share of rows flagged as most unusual, by design
+    report_top: int = Field(default=20, ge=5, le=100)
+    seed: int = Field(default=42, ge=0, le=2**31 - 1)
+    note: str = Field(default="", max_length=500)
+
+    @model_validator(mode="after")
+    def _check(self):
+        if self.k_min > self.k_max:
+            raise ValueError("k_min cannot be larger than k_max")
+        if len(set(self.methods)) != len(self.methods):
+            raise ValueError("methods must not repeat")
+        return self
+
+
+class ExplorationOut(ORM):
+    id: int
+    kind: str = "exploration"
+    deployable: bool = False          # always false: explorations can never be registered, deployed or sent to CNR
+    dataset_version_id: int | None = None
+    status: str
+    summary: dict[str, Any] = {}
+    created_by: str | None
+    created_at: UTC
+    finished_at: UTC
+
+
+class ExplorationDetail(ExplorationOut):
+    params_json: dict[str, Any] = {}
+    results_json: dict[str, Any] = {}
 
 
 class ModelVersionOut(ORM):

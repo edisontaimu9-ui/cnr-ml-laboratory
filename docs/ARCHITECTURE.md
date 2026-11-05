@@ -14,7 +14,7 @@
 | DNS / routing | — | Cloudflare |
 
 ## Data model
-`mlab_api_keys`, `mlab_model_definitions`, `mlab_datasets`, `mlab_dataset_versions`, `mlab_experiments`, `mlab_model_versions`, `mlab_audit_logs`.
+`mlab_api_keys`, `mlab_model_definitions`, `mlab_datasets`, `mlab_dataset_versions`, `mlab_experiments`, `mlab_explorations`, `mlab_model_versions`, `mlab_audit_logs`.
 Model artifacts and datasets are **not** stored in Postgres or git. Each de-identified dataset version as a gzip CSV on private disk (`DATASET_STORAGE_DIR`, a persistent volume in production) behind `app/storage.py`, which can be swapped for object storage without touching callers. `mlab_dataset_versions` gained columns over time; the API adds them to existing databases automatically at start-up (additive only, never destructive).
 
 ## Training and evaluation
@@ -23,6 +23,15 @@ Model artifacts and datasets are **not** stored in Postgres or git. Each de-iden
 - Everything shown in the dashboard comes from `experiments.metrics_json`: test metrics, baseline, bootstrap range, CV mean and spread, per-class table, confusion matrix, top features, warnings, limitations. Failures store a user-safe message.
 - The fitted pipeline is stored with `joblib` under `DATASET_STORAGE_DIR/experiments/` and never exposed over the API. The registry stores approved artifacts; only load files this service wrote itself.
 - A completed experiment does not make a model available. Availability still requires the review and sign-off added by the registry and serving.
+
+## Exploration (unsupervised analysis)
+Explorations are a deliberately separate kind of work from experiments. They answer "what structure is in this data?" rather than "can we predict this label?", so they are never candidates for the registry.
+- **Isolation by construction.** `mlab_explorations` has a foreign key to a dataset version only. It has no model definition, no label and no link to `mlab_model_versions`. `app/exploration.py` returns written results and no fitted object; no joblib file is written. The registry registers rows of `mlab_experiments` only, and serving and the CNR integration load only deployed model versions, so an exploration cannot reach either. The API output always states `kind: "exploration"` and `deployable: false`.
+- **Enforced by tests.** `tests/test_explorations.py` checks that running explorations changes nothing the registry, catalogue, overview counts or CNR contract can see (and writes no `.joblib` file), that `exploration.py`, `jobs.py` and `routers/explorations.py` import no registry, serving, predict, webhook, integration, catalog, joblib or pickle code, and that the registry router does not mention explorations.
+- **Access.** `read:explorations` for viewer, data scientist, clinical reviewer and admin; `write:explorations` for data scientist and admin. The `service` role (CNR) has neither.
+- **Method.** One shared preprocessing step (median-imputed, standardised numbers; one-hot categories; identifier-like and high-cardinality columns skipped). Clustering: k-means over a searched range of k, chosen by silhouette, with Davies-Bouldin and Calinski-Harabasz, stability (adjusted Rand index over refits on 80% subsamples) and a reference silhouette from column-shuffled data, combined into a verdict. Anomaly detection: isolation forest, a fixed share of rows flagged by design, agreement between two seeds, and per-row reasons as standardised deviations or rare-category flags. A PCA projection of up to 600 rows is returned for plotting.
+- **Scale.** Fitting, the k search, stability and the reference use at most 20,000 rows (sampled with the run's seed); all rows are assigned to groups and scored. Explorations run in a background thread like training, and `app/jobs.py` allows one heavy job at a time across both kinds. Runs interrupted by a restart are marked failed.
+- **Privacy.** Group profiles are aggregates and are suppressed for groups under 5 rows. Flagged rows are identified by position in the stored dataset version and explained without raw values or category names. The audit log records the dataset, version and methods, and a result summary; never rows or values.
 
 ## Registry and review gate
 - **Register** (`write:models`): only a `completed` experiment whose model file still exists, once. The file is copied to `models/<slug>/v<n>.joblib` under the private storage directory (immutable from then on) and its SHA-256 and size are recorded. The evaluation (`metrics_json`) is copied into the version so later edits or re-runs cannot change what was reviewed. Storage paths are never returned by the API. The registry never loads a model file; it only reads bytes.

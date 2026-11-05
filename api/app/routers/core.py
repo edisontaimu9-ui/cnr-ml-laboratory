@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from ..catalog import SAFETY_NOTICE
 from ..config import get_settings
 from ..db import get_db
-from ..models import Dataset, DatasetVersion, Experiment, ModelDefinition, ModelVersion
+from ..models import Dataset, DatasetVersion, Experiment, Exploration, ModelDefinition, ModelVersion
 from ..schemas import MeOut
 from ..security import Principal, get_principal
 
@@ -42,6 +42,7 @@ def overview(_: Principal = Depends(get_principal), db: Session = Depends(get_db
             "datasets": count(Dataset),
             "dataset_versions": count(DatasetVersion),
             "experiments": count(Experiment),
+            "explorations": count(Exploration),
             "model_versions": count(ModelVersion),
             "deployed_models": count(ModelVersion, ModelVersion.status == "deployed"),
         },

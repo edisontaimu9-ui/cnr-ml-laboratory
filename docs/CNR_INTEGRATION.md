@@ -76,3 +76,6 @@ Events: `model.deployed`, `model.rolled_back`, `model.retired` (only for a versi
 **Shared secret.** One 32+ character value, set as `CNR_WEBHOOK_SECRET` on the lab and `ML_LAB_WEBHOOK_SECRET` on CNR. Rotate by setting the new value on CNR first, then on the lab.
 
 **An event is a hint, not the truth.** The lab answers 409 whenever nothing is deployed, whatever CNR last heard, so a lost or delayed event is never unsafe.
+
+## What CNR never sees: explorations
+Unsupervised explorations (clustering, anomaly detection) are for the laboratory's own use. They are not models, are never registered or deployed, and are not part of the `cnr-ml-contract/1` contract: no endpoint, webhook event or status field refers to them, and the `service` key used by CNR cannot read them.

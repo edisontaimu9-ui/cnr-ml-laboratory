@@ -1,7 +1,7 @@
 # Deployment
 
 ## 1. Supabase
-Prefer a **new Supabase project** for the lab (keeps it independent of CNR). Copy the *pooler* connection string (Project → Connect). After the API's first start creates the tables, run `sql/enable_rls.sql` in the SQL editor.
+Prefer a **new Supabase project** for the lab (keeps it independent of CNR). Copy the *pooler* connection string (Project → Connect). After the API's first start creates the tables, run `sql/enable_rls.sql` in the SQL editor. The script covers every `mlab_` table and is safe to run again: re-run it after an update that adds a table (for example `mlab_explorations`, created automatically at the next API start).
 
 ## 2. Render
 1. New → Blueprint → select this repo (`render.yaml`).

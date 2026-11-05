@@ -44,6 +44,8 @@ main{padding:1.6rem clamp(1rem,3vw,2.2rem);max-width:68rem;width:100%}
 .card .row{display:flex;justify-content:space-between;gap:1rem;align-items:flex-start;flex-wrap:wrap}
 .badge{display:inline-block;padding:.1rem .55rem;border-radius:99px;font-size:.78rem;font-weight:600;background:var(--lake-soft);color:var(--lake)}
 .badge.planned{background:var(--maize-soft);color:var(--maize)}
+.badge.explore{background:#ece8f8;color:#4b3a8f}
+.swatch{display:inline-block;width:.8rem;height:.8rem;border-radius:50%;vertical-align:-.1rem}
 .badge.bad{background:var(--bad-soft);color:var(--bad)}
 .empty{background:var(--surface);border:1px dashed var(--line);border-radius:8px;padding:1.4rem;color:var(--muted)}
 .empty b{color:var(--ink)}

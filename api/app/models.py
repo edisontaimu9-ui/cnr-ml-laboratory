@@ -88,6 +88,23 @@ class Experiment(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
+class Exploration(Base):
+    """Unsupervised analysis (clustering, anomaly detection) of one dataset version.
+
+    Deliberately NOT an Experiment: it has no model definition, no label and no stored model file, and it has no
+    foreign key to `mlab_model_versions`. There is therefore nothing the registry could register, review, deploy
+    or serve, and nothing CNR could ever be sent. Only the written results are kept."""
+    __tablename__ = "mlab_explorations"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    dataset_version_id: Mapped[int | None] = mapped_column(ForeignKey("mlab_dataset_versions.id"), nullable=True)
+    params_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    results_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    status: Mapped[str] = mapped_column(String(32), default="queued")
+    created_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
 class ModelVersion(Base):
     """A registered, immutable copy of a trained model plus its review trail.
     Status: candidate -> in_review -> approved | rejected; approved -> deployed -> retired."""

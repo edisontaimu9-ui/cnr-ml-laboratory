@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .. import audit, storage, training
+from ..jobs import STALE_MINUTES, another_job_running
 from ..db import SessionLocal, get_db
 from ..models import DatasetVersion, Experiment, ModelDefinition, utcnow
 from ..schemas import ExperimentCreate, ExperimentDetail, ExperimentOut
@@ -16,7 +17,6 @@ from ..security import Principal, require
 
 log = logging.getLogger("cnr-ml")
 router = APIRouter(prefix="/v1/experiments", tags=["experiments"])
-STALE_MINUTES = 30
 
 
 def _summary(e: Experiment) -> dict:
@@ -73,10 +73,8 @@ def create_experiment(body: ExperimentCreate, request: Request, background: Back
     for name in [body.target, *(body.features or []), *body.exclude]:
         if name not in cols:
             raise HTTPException(422, f"Column not in this dataset version: {name[:80]}")
-    cutoff = utcnow().replace(microsecond=0)
-    busy = db.scalars(select(Experiment).where(Experiment.status.in_(["queued", "running"]))).all()
-    if any((cutoff - b.created_at).total_seconds() < STALE_MINUTES * 60 for b in busy):
-        raise HTTPException(409, "Another experiment is still running. Wait for it to finish.")
+    if another_job_running(db):
+        raise HTTPException(409, "Another experiment or exploration is still running. Wait for it to finish.")
     cfg = training.Config(target=body.target, task=d.task_type, features=body.features, exclude=body.exclude,
                           test_size=body.test_size, seed=body.seed, n_estimators=body.n_estimators,
                           max_depth=body.max_depth, learning_rate=body.learning_rate,

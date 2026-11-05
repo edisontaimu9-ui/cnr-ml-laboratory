@@ -6,7 +6,7 @@ You can upload and de-identify datasets, train and evaluate models, review and a
 
 ## Platform
 - **ML API** (`api/`, FastAPI): API-key authentication, four roles, audit log, full metadata schema (datasets, versions, experiments, model versions), a catalogue of the seven planned model targets, `/health`.
-- **Dashboard** (`dashboard/`, static HTML/JS, no build step): installable as an app (PWA), with overview, models, experiments, datasets, registry, prediction, CNR integration, audit log and key management. Pages show honest empty states until there is data.
+- **Dashboard** (`dashboard/`, static HTML/JS, no build step): installable as an app (PWA), with overview, models, experiments, exploration, datasets, registry, prediction, CNR integration, audit log and key management. Pages show honest empty states until there is data.
 - **Deployment**: Dockerfiles, `docker-compose.yml`, `render.yaml`, CI, Supabase RLS script.
 - It does not touch CNR's production API. The two will talk only through authenticated endpoints (see CNR integration below).
 
@@ -25,6 +25,16 @@ You can upload and de-identify datasets, train and evaluate models, review and a
 - **Guards:** at least 50 rows and 10 examples per class; warnings for small datasets, a model that does not beat the baseline, and suspiciously strong results (likely label leakage, for example MUAC when predicting a nutrition status derived from it).
 - **Governance:** a run never makes a model available. The first completed run only moves the catalogue entry from `planned` to `in_development`. The fitted pipeline is saved privately for the registry and is never served.
 - **Endpoints:** `POST /v1/experiments`, `GET /v1/experiments`, `GET /v1/experiments/{id}`. One experiment runs at a time.
+
+## Exploration (unsupervised analysis)
+- **A separate type, not a model.** An *exploration* looks for groups of similar rows (**clustering**, k-means) and unusual rows (**anomaly detection**, isolation forest) in a de-identified dataset version. There is no target column and no catalogue model. It is for understanding data and checking data quality.
+- **Never deployed, never sent to CNR.** Explorations live in their own table (`mlab_explorations`) with no link to model versions, and nothing is saved as a model file, so there is nothing to register, review, deploy, serve or announce. Every result carries `kind: "exploration"` and `deployable: false`, the registry and CNR integration code cannot see them, and the `service` role (CNR's machine key) cannot read them. Tests enforce the isolation, including a static check that the exploration code imports no registry, serving, predict, webhook or integration module.
+- **Honest about structure:** k-means always returns groups, so every clustering result has a verdict (*clear*, *weak* or *no clear structure*) built from the silhouette score, stability across refits on 80% subsamples (adjusted Rand index) and a reference run on column-shuffled data. The number of groups is searched over a range and the full search is shown.
+- **Honest about anomalies:** exactly the chosen share of rows is flagged by design, and the result says so. It reports how much the flagged set changes with the random seed, a score for every listed row, and why each stands out (standardised deviation per column, or a rare category). Reasons never contain raw values or category names; rows are identified by position in the stored dataset version.
+- **Privacy:** group profiles are aggregates, and groups under 5 rows are not described.
+- **Guards:** at least 50 rows and two usable columns; identifier-like and high-cardinality columns are skipped with a note; warnings for heavy missingness, tiny groups and sampling (large tables are fitted on a 20,000-row sample, every row is still assigned and scored). Only one training run or exploration runs at a time.
+- **Endpoints:** `POST /v1/explorations`, `GET /v1/explorations`, `GET /v1/explorations/{id}`. Reading needs `read:explorations` (viewer, data scientist, clinical reviewer, admin); starting one needs `write:explorations` (data scientist, admin).
+- **Dashboard:** an **Exploration** page marked *exploration · never deployed*, with the structure verdict, group profiles, flagged rows and a two-dimensional picture.
 
 ## Model registry
 - **Registry:** a completed experiment can be registered as an immutable model version. The model file is copied, hashed (SHA-256) and the evaluation is frozen with it, together with the written intended use.
@@ -58,8 +68,8 @@ You can upload and de-identify datasets, train and evaluate models, review and a
 ## Roles
 | Role | Can |
 |---|---|
-| viewer | read catalogue, models, experiments, datasets (cannot call predictions) |
-| data_scientist | viewer + create datasets, upload versions, preview rows, create experiments, register and submit model versions |
+| viewer | read catalogue, models, experiments, explorations, datasets (cannot call predictions) |
+| data_scientist | viewer + create datasets, upload versions, preview rows, create experiments and explorations, register and submit model versions |
 | clinical_reviewer | viewer + approve or reject models in review, read audit log |
 | service | read catalogue, call predictions and CNR assessments only (machine key for CNR) |
 | admin | everything, including keys, deploy, roll back, withdraw and the CNR integration status (still cannot review their own registrations) |

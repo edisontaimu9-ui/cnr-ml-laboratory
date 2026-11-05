@@ -60,6 +60,7 @@
     { id: "overview", label: "Overview", perm: null, render: overview },
     { id: "models", label: "Models", perm: "read:catalog", render: models },
     { id: "experiments", label: "Experiments", perm: "read:experiments", render: experiments },
+    { id: "explorations", label: "Exploration", perm: "read:explorations", render: explorations },
     { id: "predict", label: "Predict", perm: "predict:models", render: predictPage },
     { id: "registry", label: "Registry", perm: "read:models", render: registry },
     { id: "datasets", label: "Datasets", perm: "read:datasets", render: datasets },
@@ -78,7 +79,7 @@
       h("h1", null, "Overview"),
       h("p", null, "The Machine Learning Laboratory of the Chakudya Nutrition Registry (CNR). Upload and de-identify datasets, train and evaluate models, review and approve them in the registry, and serve the deployed version to CNR. Predictions are decision support, never confirmed diagnoses."),
       h("div", { class: "notice" }, o.safety_notice),
-      h("div", { class: "stats" }, [["Planned models", c.model_definitions], ["Datasets", c.datasets], ["Experiments", c.experiments], ["Model versions", c.model_versions], ["Deployed models", c.deployed_models]]
+      h("div", { class: "stats" }, [["Planned models", c.model_definitions], ["Datasets", c.datasets], ["Experiments", c.experiments], ["Explorations", c.explorations], ["Model versions", c.model_versions], ["Deployed models", c.deployed_models]]
         .map(([l, n]) => h("div", { class: "stat" }, h("b", null, n), h("span", null, l)))),
       c.datasets === 0 ? empty("No datasets yet", "Create one under Datasets and upload a file. Nothing has been trained and no model is available for predictions.") : null,
       h("p", { class: "muted" }, "API " + o.service.version + " · " + o.service.environment),
@@ -239,6 +240,149 @@
   }
 
 
+
+
+  // ---------- Exploration: unsupervised analysis (clustering, anomaly detection). Never registered, never deployed. ----------
+  const XP_COLORS = ["#0e5a73", "#c98a1b", "#2e8b57", "#8a4fb3", "#c0392b", "#4a7fb5", "#7a8b99", "#b5651d", "#2a9d8f", "#d4559a", "#6b705c", "#e07a5f"];
+  const xpBadge = () => h("span", { class: "badge explore" }, "exploration · never deployed");
+  const signed = (x) => (x == null ? "—" : (x > 0 ? "+" : "") + x);
+  const structureLabel = { clear_structure: "Clear structure", weak_structure: "Weak structure", no_clear_structure: "No clear structure" };
+
+  async function explorations(arg) {
+    if (arg === "new") return explorationForm();
+    if (arg) return explorationDetail(Number(arg));
+    const rows = await api("/v1/explorations");
+    const sum = (r) => {
+      const s = r.summary || {};
+      if (s.error) return "failed";
+      return [s.clustering ? s.clustering.k + " groups (" + (structureLabel[s.clustering.structure] || s.clustering.structure).toLowerCase() + ")" : null,
+        s.anomaly ? s.anomaly.flagged + " rows flagged" : null].filter(Boolean).join(" · ") || "—";
+    };
+    return [h("div", { class: "row" }, h("h1", null, "Exploration"), xpBadge()),
+      h("p", null, "Look for groups of similar rows (clustering) and unusual rows (anomaly detection) in a de-identified dataset version, with no outcome to predict. Explorations are for understanding data and checking data quality."),
+      h("div", { class: "notice" }, "An exploration is never a model. It cannot be registered, reviewed, deployed, used for predictions or sent to CNR. Groups and flags are patterns in this dataset, not diagnoses."),
+      can("write:explorations") ? h("p", null, h("button", { class: "primary", onclick: () => { location.hash = "explorations/new"; } }, "New exploration")) : null,
+      rows.length ? table(["#", "Status", "Result", "By", "Started", ""], rows.map((r) => [r.id, statusBadge(r.status), sum(r), r.created_by || "—", fmt(r.created_at),
+        h("button", { class: "link", onclick: () => { location.hash = "explorations/" + r.id; } }, "Open")]))
+        : empty("No explorations yet", can("write:explorations") ? "Upload a dataset version first, then start an exploration." : "A data scientist or admin can start the first exploration.")];
+  }
+
+  async function explorationForm() {
+    const sets = (await api("/v1/datasets")).filter((d) => d.version_count > 0);
+    const back = h("p", null, h("button", { class: "link", onclick: () => { location.hash = "explorations"; } }, "← All explorations"));
+    if (!sets.length) return [back, h("h1", null, "New exploration"), empty("No dataset versions yet", "Create a dataset and upload a file under Datasets first.")];
+    const dset = h("select", { id: "ed" }, sets.map((d) => h("option", { value: d.id }, d.name)));
+    const ver = h("select", { id: "ev" });
+    const excl = h("div", { class: "checks" });
+    const err = h("p", { class: "error", role: "alert" });
+    const num = (id, v, min, max, step) => h("input", { id, type: "number", value: v, min, max, step: step || 1 });
+    const mc = h("input", { id: "emc", type: "checkbox", checked: true }), ma = h("input", { id: "ema", type: "checkbox", checked: true });
+    const kmin = num("ekmin", 2, 2, 12), kmax = num("ekmax", 8, 2, 12), kfix = num("ek", "", 2, 12);
+    const share = num("efs", 5, 0.5, 20, 0.5), top = num("etop", 20, 5, 100), seed = num("es", 42, 0, 2147483647);
+    const note = h("textarea", { id: "en", rows: 2, maxlength: 500, placeholder: "Optional: why you are looking at this data. Do not type names or ID numbers." });
+    let versions = [];
+    const cols = () => (versions.find((v) => String(v.version) === ver.value) || { schema_info: { columns: [] } }).schema_info.columns || [];
+    const drawCols = () => excl.replaceChildren(...cols().map((c) => h("label", { class: "chk" }, h("input", { type: "checkbox", value: c.name }), " " + c.name)));
+    const loadVersions = async () => {
+      versions = (await api("/v1/datasets/" + dset.value)).versions;
+      ver.replaceChildren(...versions.map((v) => h("option", { value: v.version }, "v" + v.version + " (" + v.row_count + " rows)")));
+      drawCols();
+    };
+    dset.addEventListener("change", loadVersions); ver.addEventListener("change", drawCols);
+    await loadVersions();
+    const go = h("button", { class: "primary", onclick: async () => {
+      err.textContent = "";
+      const methods = [mc.checked ? "clustering" : null, ma.checked ? "anomaly" : null].filter(Boolean);
+      if (!methods.length) { err.textContent = "Choose clustering, anomaly detection or both."; return; }
+      if (Number(kmin.value) > Number(kmax.value)) { err.textContent = "The smallest number of groups cannot be larger than the largest."; return; }
+      go.disabled = true;
+      try {
+        const body = { dataset_id: Number(dset.value), version: Number(ver.value), methods, exclude: [...excl.querySelectorAll("input:checked")].map((i) => i.value),
+          k_min: Number(kmin.value), k_max: Number(kmax.value), flag_share: Number(share.value) / 100, report_top: Number(top.value), seed: Number(seed.value), note: note.value.trim() };
+        if (kfix.value !== "") body.k = Number(kfix.value);
+        const x = await api("/v1/explorations", { method: "POST", body: JSON.stringify(body) });
+        location.hash = "explorations/" + x.id;
+      } catch (e) { err.textContent = e.message; go.disabled = false; }
+    } }, "Start exploration");
+    return [back, h("div", { class: "row" }, h("h1", null, "New exploration"), xpBadge()),
+      h("div", { class: "notice" }, "Leave out identifier-like columns and any outcome or label column (for example a nutrition status, or the measurements it is calculated from). Otherwise the groups simply reproduce that column. This analysis produces no model and nothing from it can be deployed."),
+      h("div", { class: "form3" }, field("Dataset", dset, "ed"), field("Version", ver, "ev")),
+      h("label", null, "Columns to leave out"), excl,
+      h("div", { class: "form3" }, h("div", null, h("label", { for: "emc" }, "Look for groups (clustering)"), mc), h("div", null, h("label", { for: "ema" }, "Look for unusual rows (anomaly detection)"), ma)),
+      h("details", { class: "card" }, h("summary", null, "Settings"),
+        h("div", { class: "form3" }, field("Fewest groups to try", kmin, "ekmin"), field("Most groups to try", kmax, "ekmax"), field("Or set the number of groups (optional)", kfix, "ek")),
+        h("div", { class: "form3" }, field("Share of rows to flag (%)", share, "efs"), field("Flagged rows to list", top, "etop"), field("Random seed", seed, "es")),
+        field("Note", note, "en")),
+      go, err];
+  }
+
+  function scatter(proj, k) {
+    const NS = "http://www.w3.org/2000/svg", W = 560, H = 340, pad = 28;
+    const el = (tag, attrs) => { const e = document.createElementNS(NS, tag); for (const [a, v] of Object.entries(attrs || {})) e.setAttribute(a, v); return e; };
+    const pts = proj.points || [];
+    if (!pts.length) return null;
+    const xs = pts.map((q) => q[0]), ys = pts.map((q) => q[1]);
+    const [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
+    const sx = (v) => pad + ((v - x0) / (x1 - x0 || 1)) * (W - 2 * pad), sy = (v) => H - pad - ((v - y0) / (y1 - y0 || 1)) * (H - 2 * pad);
+    const svg = el("svg", { viewBox: "0 0 " + W + " " + H, role: "img", width: "100%", "aria-label": "Two-dimensional view of the rows, coloured by group, with unusual rows ringed" });
+    svg.appendChild(el("rect", { x: 0.5, y: 0.5, width: W - 1, height: H - 1, fill: "none", stroke: "#c9d6da" }));
+    pts.forEach(([x, y, g, f]) => svg.appendChild(el("circle", { cx: sx(x).toFixed(1), cy: sy(y).toFixed(1), r: f ? 5 : 3.2, fill: g >= 0 ? XP_COLORS[g % XP_COLORS.length] : "#7a8b99",
+      "fill-opacity": f ? 0.95 : 0.55, stroke: f ? "#111" : "none", "stroke-width": f ? 1.6 : 0 })));
+    const ev = proj.explained_variance || [];
+    svg.appendChild(Object.assign(el("text", { x: W / 2, y: H - 8, "text-anchor": "middle", "font-size": 11, fill: "#5b6b72" }), { textContent: "Component 1 (" + pct(ev[0]) + " of the variation)" }));
+    const yl = el("text", { x: 11, y: H / 2, "text-anchor": "middle", "font-size": 11, fill: "#5b6b72", transform: "rotate(-90 11 " + H / 2 + ")" });
+    yl.textContent = "Component 2 (" + pct(ev[1]) + ")"; svg.appendChild(yl);
+    const legend = k ? h("p", { class: "muted" }, Array.from({ length: k }, (_, g) => h("span", { class: "chk" }, h("span", { class: "swatch", "data-g": g }), " Group " + (g + 1) + "  "))) : null;
+    if (legend) legend.querySelectorAll(".swatch").forEach((s) => { s.style.background = XP_COLORS[Number(s.dataset.g) % XP_COLORS.length]; });
+    return h("div", null, svg, legend, h("p", { class: "muted" }, "Ringed points are flagged rows. " + proj.note));
+  }
+
+  async function explorationDetail(id) {
+    const x = await api("/v1/explorations/" + id);
+    const r = x.results_json || {}, pr = x.params_json || {}, cfg = pr.config || {};
+    const out = [h("p", null, h("button", { class: "link", onclick: () => { location.hash = "explorations"; } }, "← All explorations")),
+      h("div", { class: "row" }, h("h1", null, "Exploration #" + x.id), xpBadge(), statusBadge(x.status)),
+      h("p", { class: "muted" }, "Dataset " + (pr.dataset_id || "?") + " v" + (pr.dataset_version || "?") + " · " + (cfg.methods || []).join(" + ") + " · started " + fmt(x.created_at) + " by " + (x.created_by || "—") + (pr.note ? " · " + pr.note : ""))];
+    if (x.status === "queued" || x.status === "running") {
+      out.push(h("div", { class: "notice" }, "The analysis is running. This page refreshes by itself."));
+      poll = setTimeout(() => { if (location.hash.slice(1) === "explorations/" + id) show("explorations/" + id, true); }, 2500);
+      return out;
+    }
+    if (x.status === "failed") { out.push(h("div", { class: "notice" }, r.error || "The analysis failed.")); return out; }
+    const stat = (l, v, sub) => h("div", { class: "stat" }, h("b", null, v), h("span", null, l + (sub ? " · " + sub : "")));
+    out.push(h("div", { class: "notice" }, r.notice));
+    (r.warnings || []).forEach((w) => out.push(h("div", { class: "notice" }, w)));
+    out.push(h("p", { class: "muted" }, r.n_rows + " rows" + (r.sampled ? " (fitted on a sample of " + r.n_used + ")" : "") + " · " + [...(r.features.numeric || []), ...(r.features.categorical || [])].length + " columns used."));
+    const c = r.clustering, a = r.anomaly;
+    if (c) {
+      out.push(h("h2", null, "Groups (k-means, " + c.k + " groups)"), h("div", { class: "notice" }, h("b", null, (structureLabel[c.structure] || c.structure) + ". "), c.structure_summary),
+        h("div", { class: "stats" }, stat("Silhouette", n3(c.quality.silhouette), "shuffled-data reference " + n3(c.reference.silhouette)),
+          stat("Stability across refits", n3(c.stability.adjusted_rand_mean), "1 = identical groups"), stat("Davies–Bouldin", n3(c.quality.davies_bouldin), "lower is better")),
+        h("p", { class: "muted" }, "Number of groups: " + c.k_selected_by + ". Silhouette ranges from −1 to 1; above about 0.5 is well separated, below 0.25 is no real structure."),
+        h("details", { class: "card" }, h("summary", null, "Search over the number of groups"),
+          table(["Groups", "Silhouette", "Smallest group"], c.k_search.map((q) => [q.k + (q.k === c.k ? " (chosen)" : ""), n3(q.silhouette), pct(q.smallest_group_share)]))),
+        h("h2", null, "What each group looks like"), h("p", { class: "muted" }, "Averages over each group compared with all rows. A z of +1 means about one standard deviation above the overall mean. Groups under 5 rows are not described."));
+      (c.groups || []).forEach((g) => out.push(h("div", { class: "card" },
+        h("div", { class: "row" }, h("h3", null, "Group " + (g.cluster + 1)), h("span", { class: "muted" }, g.size + " rows · " + pct(g.share))),
+        g.suppressed ? h("p", { class: "muted" }, g.note) : [
+          h("p", null, (g.numeric || []).map((q) => q.feature + " " + signed(q.z) + " (mean " + n3(q.mean) + " vs " + n3(q.overall_mean) + ")").join(" · ") || "No numeric difference worth noting."),
+          (g.categorical || []).length ? h("p", { class: "muted" }, g.categorical.map((q) => q.feature + ": " + q.level + " " + pct(q.share) + " vs " + pct(q.overall_share) + " overall").join(" · ")) : null])));
+    }
+    if (a) {
+      out.push(h("h2", null, "Unusual rows (isolation forest)"),
+        h("div", { class: "stats" }, stat("Rows flagged", a.n_flagged, pct(a.flag_share) + " by design"), stat("Same rows flagged on another seed", pct(a.stability.flagged_set_overlap)),
+          stat("Rank agreement between seeds", n3(a.stability.rank_correlation_between_seeds))),
+        h("p", { class: "muted" }, a.score_note + " " + a.row_index_note),
+        table(["Rank", "Row", "Score", "Why it stands out"], (a.top || []).map((t) => [t.rank, t.row_index, n3(t.score),
+          t.reasons.length ? t.reasons.map((q) => q.kind === "numeric" ? q.feature + " is " + q.direction + " (z " + signed(q.z) + ")" : q.feature + " has a rare value (" + pct(q.share_of_rows) + " of rows)").join("; ") : "An unusual combination of values rather than one extreme column"])),
+        a.flagged_profile && a.flagged_profile.length ? h("p", { class: "muted" }, "Flagged rows differ most in: " + a.flagged_profile.slice(0, 4).map((q) => q.feature + " (mean z " + signed(q.mean_z_flagged) + ")").join(", ") + ".") : null);
+      if (a.by_cluster && a.by_cluster.length) out.push(h("h3", null, "Flagged rows by group"), table(["Group", "Rows", "Flagged", "Share flagged"], a.by_cluster.map((q) => ["Group " + (q.cluster + 1), q.size, q.flagged, pct(q.flagged_share)])));
+    }
+    const sc = scatter(r.projection || {}, c ? c.k : 0);
+    if (sc) out.push(h("h2", null, "Picture of the data"), sc);
+    out.push(h("h2", null, "Limits of this result"), h("ul", { class: "plain" }, (r.limitations || []).map((q) => h("li", null, q))));
+    return out;
+  }
 
   async function integrationPage() {
     const s = await api("/v1/integration/cnr/status");
