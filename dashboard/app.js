@@ -59,10 +59,6 @@
       h("div", { class: "notice" }, o.safety_notice),
       h("div", { class: "stats" }, [["Planned models", c.model_definitions], ["Datasets", c.datasets], ["Experiments", c.experiments], ["Model versions", c.model_versions], ["Deployed models", c.deployed_models]]
         .map(([l, n]) => h("div", { class: "stat" }, h("b", null, n), h("span", null, l)))),
-      h("h2", null, "Build progress"),
-      h("ol", { class: "track" }, o.phase.roadmap.map((p) =>
-        h("li", { class: p.phase === o.phase.current ? "current" : "", "aria-current": p.phase === o.phase.current ? "step" : null },
-          h("span", { class: "n" }, "Phase " + p.phase), h("span", { class: "t" }, p.name)))),
       c.datasets === 0 ? empty("No datasets yet", "Create one under Datasets and upload a file. Nothing has been trained and no model is available for predictions.") : null,
       h("p", { class: "muted" }, "API " + o.service.version + " · " + o.service.environment),
     ];

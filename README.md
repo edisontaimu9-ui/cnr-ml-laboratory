@@ -2,30 +2,30 @@
 
 An independent machine-learning platform for the Chakudya Nutrition Registry (CNR): datasets, training, evaluation, a model registry and a prediction API, with governance built in.
 
-**Status: Phase 6 of 6 — CNR integration.** You can upload and de-identify datasets, train and evaluate models, review and approve them, serve the deployed version, and let CNR request assessments through a dedicated, authenticated contract. Predictions are never presented as confirmed diagnoses.
+You can upload and de-identify datasets, train and evaluate models, review and approve them, serve the deployed version, and let CNR request assessments through a dedicated, authenticated contract. Predictions are never presented as confirmed diagnoses.
 
-## What Phase 1 delivers
+## Platform
 - **ML API** (`api/`, FastAPI): API-key authentication, four roles, audit log, full metadata schema (datasets, versions, experiments, model versions), a catalogue of the seven planned model targets, `/health`.
-- **Dashboard** (`dashboard/`, static HTML/JS, no build step): overview with build progress, models, experiments, datasets, audit log and key management. Pages show honest empty states until later phases fill them.
+- **Dashboard** (`dashboard/`, static HTML/JS, no build step): installable as an app (PWA), with overview, models, experiments, datasets, registry, prediction, CNR integration, audit log and key management. Pages show honest empty states until there is data.
 - **Deployment**: Dockerfiles, `docker-compose.yml`, `render.yaml`, CI, Supabase RLS script.
-- It does not touch CNR's production API. The two will talk only through authenticated endpoints (Phase 6).
+- It does not touch CNR's production API. The two will talk only through authenticated endpoints (see CNR integration below).
 
-## What Phase 2 adds
+## Datasets
 - **Two-step upload** (`.csv` or `.xlsx`, 20 MB, 200k rows): *inspect* proposes a de-identification plan without storing anything; *create version* applies the reviewed plan and stores only the de-identified table.
 - **Identifier detection** by column name and by value (emails, phone numbers, ID-like numbers, free text). Flagged columns are dropped by default and their values are never shown or logged. Direct identifiers can only be kept with a written reason; columns whose values contain personal data can never be kept.
 - **Actions per column:** keep, drop, pseudonymise (keyed HMAC, stable within a column), year only (dates).
-- **Cleaning:** header normalisation, missing-value tokens, numeric/date typing, empty-row and duplicate removal. No imputation or encoding here; that happens inside training (Phase 3) to avoid leakage.
+- **Cleaning:** header normalisation, missing-value tokens, numeric/date typing, empty-row and duplicate removal. No imputation or encoding here; that happens inside training to avoid leakage.
 - **Governance:** every version records a source hash, stored-file hash, approval reference, uploader, a de-identification report and a k-anonymity check on quasi-identifiers. Uploads, rejections and previews are audited.
 - **Endpoints:** `POST /v1/datasets`, `POST /v1/datasets/inspect`, `GET /v1/datasets/{id}`, `POST /v1/datasets/{id}/versions`, `GET /v1/datasets/{id}/versions/{n}/preview`.
 
-## What Phase 3 adds
+## Experiments
 - **Experiments:** pick a catalogue model, a dataset version, a target column and columns to leave out; the API trains an XGBoost model in the background and records the result.
 - **Honest evaluation:** stratified hold-out split, cross-validation on the training part only, a trivial baseline next to every score, a bootstrap 95% range, per-class results, confusion matrix and feature importance. All preprocessing sits inside the pipeline, so nothing leaks from the test set.
 - **Guards:** at least 50 rows and 10 examples per class; warnings for small datasets, a model that does not beat the baseline, and suspiciously strong results (likely label leakage, for example MUAC when predicting a nutrition status derived from it).
-- **Governance:** a run never makes a model available. The first completed run only moves the catalogue entry from `planned` to `in_development`. The fitted pipeline is saved privately for Phase 4 and is never served.
+- **Governance:** a run never makes a model available. The first completed run only moves the catalogue entry from `planned` to `in_development`. The fitted pipeline is saved privately for the registry and is never served.
 - **Endpoints:** `POST /v1/experiments`, `GET /v1/experiments`, `GET /v1/experiments/{id}`. One experiment runs at a time.
 
-## What Phase 4 adds
+## Model registry
 - **Registry:** a completed experiment can be registered as an immutable model version. The model file is copied, hashed (SHA-256) and the evaluation is frozen with it, together with the written intended use.
 - **Review gate:** `candidate → in review → approved | rejected`. Approval needs a clinical reviewer, a reference to the external validation evidence, written review notes and, when the evaluation carries warnings, an explicit acknowledgement. Rejection is final for that version.
 - **Four eyes:** the key that registered or submitted a version cannot approve or reject it (`REQUIRE_SEPARATE_REVIEWER`, on by default).
@@ -33,21 +33,21 @@ An independent machine-learning platform for the Chakudya Nutrition Registry (CN
 - **Audit and history:** every step is written to the audit log and to the version's own history. The catalogue status follows (`in_development` → `approved` → `deployed`).
 - **Endpoints:** `POST /v1/models/versions`, `GET /v1/models/versions[/{id}]`, `POST /v1/models/versions/{id}/submit|approve|reject|deploy|retire`, `POST /v1/models/{slug}/rollback`.
 - **Dashboard:** new **Registry** page with a version page for each model (evaluation, warnings, review form, actions, history), and a *Register* panel on completed experiments.
-- "Deployed" only designates which version Phase 5 will serve. Registering, approving or deploying never exposes a prediction endpoint.
+- "Deployed" only designates which version is served. Registering, approving or deploying never exposes a prediction endpoint.
 
-## What Phase 5 adds
+## Serving predictions
 - **Serving:** `POST /v1/predict/{slug}` answers only from the *deployed* version of a model. No deployed version means a clear 409 refusal, never a guess. Retiring or rolling back takes effect on the next request.
 - **Integrity:** the model file is hashed against the SHA-256 recorded at registration before it is ever loaded; a changed file pauses predictions (503) and is audited.
 - **Every response** carries the model name and version, approval and validation reference, intended use, evaluation headline, timestamp, request ID, a caveats list, `decision_support_only: true` and the safety notice. Results are called *risk estimates*, with per-class scores, a margin and a low-confidence flag; sparse or unfamiliar input lowers confidence and says so.
 - **Strict input:** only the model's own features are accepted (unknown fields such as names are rejected), numbers must be numbers, up to 50 records per call. Inputs and outputs are not stored; the audit log records counts, model version and request ID only.
 - **Limits:** 60 prediction requests per key per minute (`RATE_LIMIT_PREDICT_PER_MIN`), and repeated wrong-key attempts from one address are throttled (`AUTH_FAIL_LIMIT`) so they cannot flood the audit log. Valid keys are never blocked by the second limit.
-- **New role `service`:** can read the catalogue and call predictions, nothing else. Intended for the CNR integration in Phase 6.
+- **New role `service`:** can read the catalogue and call predictions, nothing else. Intended for the CNR integration.
 - **Endpoints:** `GET /v1/predict`, `GET /v1/predict/{slug}` (features and known categories), `POST /v1/predict/{slug}`.
 - **Dashboard:** a **Predict** page that builds the entry form from the deployed model.
 
-## What Phase 6 adds
+## CNR integration
 - **CNR contract (`cnr-ml-contract/1`):** `GET /v1/integration/cnr/models` lists deployed models with the exact features CNR must send. `POST /v1/integration/cnr/assess/{slug}` takes up to 50 cases, each an opaque `case_ref` plus `features`, and returns one result per case with the `case_ref` echoed back, the model version, approval reference, caveats and the safety notice. An optional `X-Request-Id` header is echoed as `correlation_id`.
-- **Same safety rules as Phase 5:** it runs through the same code as `/v1/predict`: deployed version only (409 otherwise), hash check, strict features, the per-key rate limit. Case references that look like emails or phone/ID numbers are rejected. Case references and features are never stored; the audit log (`integration.assess`) holds counts, model version, request ID and correlation ID only.
+- **Same safety rules as predictions:** it runs through the same code as `/v1/predict`: deployed version only (409 otherwise), hash check, strict features, the per-key rate limit. Case references that look like emails or phone/ID numbers are rejected. Case references and features are never stored; the audit log (`integration.assess`) holds counts, model version, request ID and correlation ID only.
 - **Admin status and reachability:** `GET /v1/integration/cnr/status` shows whether the CNR address is configured, the active service keys and their last use, deployed models and 24-hour usage. `?probe=true` makes one outbound check of `CNR_API_BASE_URL` (no credentials or data sent, redirects not followed, 6 per minute, audited).
 - **Dashboard:** new **CNR integration** page (admin).
 - **Docs:** [docs/CNR_INTEGRATION.md](docs/CNR_INTEGRATION.md) has the contract and a worked example for the calling side.
@@ -75,6 +75,3 @@ Open the dashboard and sign in with the bootstrap key, then create per-person ke
 
 ## Deploy
 See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). Design and governance: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
-
-## Roadmap
-1. Foundation and dashboard ✅ 2. Dataset ingestion and preprocessing ✅ 3. First XGBoost model and evaluation ✅ 4. Model registry and versioning ✅ 5. Approved model served via FastAPI ✅ 6. Integration with the CNR API ✅
