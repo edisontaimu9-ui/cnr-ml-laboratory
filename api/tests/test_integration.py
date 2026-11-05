@@ -1,4 +1,4 @@
-"""Phase 6: CNR integration contract, status and reachability check."""
+"""CNR integration contract, status and reachability check."""
 import json
 
 import pytest

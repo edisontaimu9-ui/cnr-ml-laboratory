@@ -1,7 +1,7 @@
 {
-  "name": "CNR Machine Learning Laboratory",
+  "name": "Chakudya Nutrition Registry (CNR) Machine Learning Laboratory",
   "short_name": "CNR ML Lab",
-  "description": "Datasets, experiments and model registry for the CNR Machine Learning Laboratory.",
+  "description": "The Machine Learning Laboratory of the Chakudya Nutrition Registry (CNR). Upload and de-identify datasets, train and evaluate models, review and approve them in the registry, and serve the deployed version to CNR. Predictions are decision support, never confirmed diagnoses.",
   "id": "/",
   "start_url": "/",
   "scope": "/",

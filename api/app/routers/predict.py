@@ -1,4 +1,4 @@
-"""Prediction endpoints (Phase 5). Decision support only: every response names the model version and
+"""Prediction endpoints. Decision support only: every response names the model version and
 carries the safety notice. Inputs and outputs are never stored; the audit log records counts only."""
 import uuid
 from typing import Any

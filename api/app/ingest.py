@@ -2,7 +2,7 @@
 
 Design rules
 - Nothing is imputed or encoded here. Imputation/encoding belong inside the
-  training pipeline (Phase 3) so they are fitted on training folds only.
+  training pipeline so they are fitted on training folds only.
 - The raw file is never stored. Flagged columns are never profiled or echoed.
 - Direct identifiers cannot be kept without an explicit, audited reason.
 """

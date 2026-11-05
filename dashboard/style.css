@@ -25,6 +25,7 @@ label{display:block;font-weight:600;margin:.8rem 0 .3rem}
 #app{display:grid;grid-template-columns:15rem 1fr;min-height:100vh}
 aside{background:var(--ink);color:#e6f0f2;padding:1.2rem 1rem;display:flex;flex-direction:column;gap:1rem;position:sticky;top:var(--bar-h,0px);height:calc(100vh - var(--bar-h,0px))}
 .brand{font-weight:700;font-size:1.05rem}
+.brand small{display:block;font-weight:500;font-size:.75rem;opacity:.8;margin-top:2px}
 nav{display:flex;flex-direction:column;gap:.15rem}
 nav button{text-align:left;background:none;border:0;color:#cfe1e6;padding:.55rem .7rem;border-radius:6px}
 nav button[aria-current="page"]{background:var(--lake);color:#fff;font-weight:600}

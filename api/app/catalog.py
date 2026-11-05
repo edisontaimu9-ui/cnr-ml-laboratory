@@ -25,15 +25,6 @@ CATALOG = [
      "Predict nutritional outcomes (for example weight change or recovery time) after intervention."),
 ]
 
-ROADMAP = [
-    (1, "Foundation and dashboard"),
-    (2, "Dataset ingestion and preprocessing"),
-    (3, "First XGBoost model and evaluation"),
-    (4, "Model registry and versioning"),
-    (5, "Approved model served via FastAPI"),
-    (6, "Integration with the CNR API"),
-]
-
 SAFETY_NOTICE = (
     "Model outputs are risk estimates to support, not replace, clinical judgement. "
     "They are never confirmed diagnoses."

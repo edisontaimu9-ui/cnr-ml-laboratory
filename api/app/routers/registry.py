@@ -1,10 +1,10 @@
-"""Model registry and review gate (Phase 4).
+"""Model registry and review gate.
 
 Lifecycle:  candidate -> in_review -> approved | rejected
             approved -> deployed -> retired
 
-"deployed" means *designated as the version to serve*; the prediction endpoints (Phase 5) only ever load the
-deployed version. Phase 6 also tells CNR (signed webhook) when a deployed version changes.
+"deployed" means *designated as the version to serve*; the prediction endpoints only ever load the
+deployed version. The lab also tells CNR (signed webhook) when a deployed version changes.
 The registry never loads (unpickles) an artifact; it only copies, hashes and compares bytes."""
 import hashlib
 from sqlalchemy.exc import IntegrityError
@@ -23,7 +23,7 @@ from ..security import Principal, require
 router = APIRouter(prefix="/v1", tags=["registry"])
 
 
-# ---------- catalogue (unchanged from Phase 1) ----------
+# ---------- catalogue ----------
 
 @router.get("/catalog", response_model=list[ModelDefinitionOut],
             dependencies=[Depends(require("read:catalog"))])

@@ -1,4 +1,4 @@
-"""Phase 5: serving, input validation, refusal when nothing is deployed, rate limits."""
+"""Serving: input validation, refusal when nothing is deployed, rate limits."""
 import json
 
 import pytest

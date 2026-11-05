@@ -1,6 +1,6 @@
 """Metadata schema. Tables are prefixed `mlab_` so they can never collide with
-CNR tables if the same Postgres instance is shared. Phase 1 creates the full
-skeleton; later phases add the write paths."""
+CNR tables if the same Postgres instance is shared. The full
+skeleton is created at start-up; the write paths sit in the routers."""
 from datetime import datetime, timezone
 
 from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
@@ -60,7 +60,7 @@ class DatasetVersion(Base):
     schema_json: Mapped[dict] = mapped_column(JSON, default=dict)
     deidentified: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
-    # Phase 2
+    # Dataset ingestion
     column_count: Mapped[int] = mapped_column(Integer, default=0)
     source_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     file_format: Mapped[str | None] = mapped_column(String(8), nullable=True)
@@ -102,7 +102,7 @@ class ModelVersion(Base):
     approved_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
     clinical_validation_ref: Mapped[str | None] = mapped_column(String(500), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
-    # Phase 4: registry
+    # Registry
     dataset_version_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     artifact_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     artifact_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)

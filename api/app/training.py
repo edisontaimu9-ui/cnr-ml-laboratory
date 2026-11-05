@@ -1,4 +1,4 @@
-"""XGBoost training and evaluation (Phase 3).
+"""XGBoost training and evaluation.
 
 Rules
 - Every preprocessing step lives inside the sklearn Pipeline, so it is fitted on training data only.

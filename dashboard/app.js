@@ -56,6 +56,7 @@
     const c = o.counts;
     return [
       h("h1", null, "Overview"),
+      h("p", null, "The Machine Learning Laboratory of the Chakudya Nutrition Registry (CNR). Upload and de-identify datasets, train and evaluate models, review and approve them in the registry, and serve the deployed version to CNR. Predictions are decision support, never confirmed diagnoses."),
       h("div", { class: "notice" }, o.safety_notice),
       h("div", { class: "stats" }, [["Planned models", c.model_definitions], ["Datasets", c.datasets], ["Experiments", c.experiments], ["Model versions", c.model_versions], ["Deployed models", c.deployed_models]]
         .map(([l, n]) => h("div", { class: "stat" }, h("b", null, n), h("span", null, l)))),
@@ -216,7 +217,7 @@
     if (!s.service_keys.length) out.append(empty("No service key yet", "Create a key with the service role under Access and store it only as a secret in CNR."));
     else out.append(table(["Name", "Prefix", "Created", "Last used"], s.service_keys.map((k) => [k.name, k.prefix, fmt(k.created_at), fmt(k.last_used_at)])));
     if (!s.deployed_models) out.append(h("div", { class: "notice" }, "No model is deployed, so CNR assessments are refused with a clear message."));
-    return [h("h1", null, "CNR integration"), out];
+    return [h("h1", null, "Chakudya Nutrition Registry (CNR) integration"), out];
   }
 
   async function predictPage() {

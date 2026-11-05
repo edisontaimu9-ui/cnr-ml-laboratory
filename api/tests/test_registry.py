@@ -1,4 +1,4 @@
-"""Phase 4: registry, review gate, deployment designation and rollback."""
+"""Registry: review gate, deployment designation and rollback."""
 import hashlib
 
 import pytest

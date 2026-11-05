@@ -18,7 +18,7 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
     "viewer": _VIEW,
     "data_scientist": _VIEW | {"write:datasets", "write:experiments", "read:dataset_rows", "write:models", "predict:models"},
     "clinical_reviewer": _VIEW | {"approve:models", "read:audit", "predict:models"},
-    # Machine key for the CNR integration (Phase 6): can list the catalogue and call predictions, nothing else.
+    # Machine key for the CNR integration: can list the catalogue and call predictions, nothing else.
     "service": {"read:catalog", "read:models", "predict:models"},
     "admin": _VIEW | {"write:datasets", "write:experiments", "read:dataset_rows", "write:models", "approve:models",
                       "read:audit", "manage:keys", "deploy:models", "predict:models", "read:integration"},

@@ -35,7 +35,7 @@ def get_db() -> Iterator[Session]:
 
 def add_missing_columns() -> None:
     """Additive-only migration. `create_all` never alters existing tables, so
-    columns introduced after Phase 1 are added here (idempotent, never drops)."""
+    columns introduced after the first release are added here (idempotent, never drops)."""
     insp = inspect(engine)
     with engine.begin() as conn:
         for table in Base.metadata.sorted_tables:

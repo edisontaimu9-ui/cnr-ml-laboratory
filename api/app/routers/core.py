@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
-from ..catalog import ROADMAP, SAFETY_NOTICE
+from ..catalog import SAFETY_NOTICE
 from ..config import get_settings
 from ..db import get_db
 from ..models import Dataset, DatasetVersion, Experiment, ModelDefinition, ModelVersion
@@ -10,7 +10,6 @@ from ..schemas import MeOut
 from ..security import Principal, get_principal
 
 router = APIRouter()
-CURRENT_PHASE = 6
 
 
 @router.get("/health", tags=["system"])
@@ -47,7 +46,5 @@ def overview(_: Principal = Depends(get_principal), db: Session = Depends(get_db
             "deployed_models": count(ModelVersion, ModelVersion.status == "deployed"),
         },
         "catalog_status": by_status,
-        "phase": {"current": CURRENT_PHASE,
-                  "roadmap": [{"phase": n, "name": t} for n, t in ROADMAP]},
         "safety_notice": SAFETY_NOTICE,
     }

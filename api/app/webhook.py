@@ -1,4 +1,4 @@
-"""Lab -> CNR model-status events (Phase 6).
+"""Lab -> CNR model-status events.
 
 When a model is deployed, rolled back or withdrawn, the lab tells CNR so it can stop offering (or start offering)
 the estimate. The event holds only the model slug, version number and what happened: no patient data, no

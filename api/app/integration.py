@@ -1,4 +1,4 @@
-"""CNR integration helpers (Phase 6).
+"""CNR integration helpers.
 
 The laboratory and CNR talk only over authenticated HTTPS. CNR calls the lab with a `service` key
 (see routers/integration.py). This module covers the other direction in the one way that needs no

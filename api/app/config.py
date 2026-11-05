@@ -11,23 +11,23 @@ class Settings(BaseSettings):
     bootstrap_admin_key: str = ""
     cors_origins: str = "http://localhost:8080"
     cnr_api_base_url: str = ""
-    # Phase 6: outbound reachability check of the CNR API (fixed URL from the environment, never from a request)
+    # Outbound reachability check of the CNR API (fixed URL from the environment, never from a request)
     cnr_api_health_path: str = "/"
     cnr_api_timeout_s: float = 5.0
-    # Phase 6 (lab -> CNR): signed model-status events. Off until both are set. The secret must be >= 32 chars and
+    # Lab -> CNR: signed model-status events. Off until both are set. The secret must be >= 32 chars and
     # equal to ML_LAB_WEBHOOK_SECRET on the CNR API.
     cnr_webhook_url: str = ""
     cnr_webhook_secret: str = ""
     service_version: str = "0.6.0"
-    # Phase 2: dataset ingestion
+    # Dataset ingestion
     dataset_storage_dir: str = "./data/datasets"
     pseudonym_key: str = ""          # >= 32 chars; enables the "pseudonymise" action
     max_upload_mb: int = 20
     max_rows: int = 200_000
     max_columns: int = 300
-    # Phase 4: governance. A model must be reviewed by a different key than the one that registered/submitted it.
+    # Governance. A model must be reviewed by a different key than the one that registered/submitted it.
     require_separate_reviewer: bool = True
-    # Phase 5: limits (per API key for predictions; per client address for repeated wrong keys)
+    # Limits (per API key for predictions; per client address for repeated wrong keys)
     rate_limit_predict_per_min: int = 60
     auth_fail_limit: int = 20
     auth_fail_window_s: int = 300

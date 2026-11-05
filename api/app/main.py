@@ -21,7 +21,7 @@ def _seed() -> None:
     with SessionLocal() as db:
         existing = {m.slug for m in db.scalars(select(ModelDefinition))}
         for slug, name, task, desc in CATALOG:
-            if slug not in existing:  # never overwrite status changed by later phases
+            if slug not in existing:  # never overwrite a status changed since
                 db.add(ModelDefinition(slug=slug, name=name, task_type=task,
                                        description=desc, label_source=LABEL_NOTE))
         key = settings.bootstrap_admin_key

@@ -13,36 +13,36 @@
 | Metadata | — | Supabase Postgres (tables prefixed `mlab_`) |
 | DNS / routing | — | Cloudflare |
 
-## Data model (created in Phase 1, extended in Phase 2)
+## Data model
 `mlab_api_keys`, `mlab_model_definitions`, `mlab_datasets`, `mlab_dataset_versions`, `mlab_experiments`, `mlab_model_versions`, `mlab_audit_logs`.
-Model artifacts and datasets are **not** stored in Postgres or git. Phase 2 stores each de-identified dataset version as a gzip CSV on private disk (`DATASET_STORAGE_DIR`, a persistent volume in production) behind `app/storage.py`, which can be swapped for object storage without touching callers. `mlab_dataset_versions` gained columns in Phase 2; the API adds them to existing databases automatically at start-up (additive only, never destructive).
+Model artifacts and datasets are **not** stored in Postgres or git. Each de-identified dataset version as a gzip CSV on private disk (`DATASET_STORAGE_DIR`, a persistent volume in production) behind `app/storage.py`, which can be swapped for object storage without touching callers. `mlab_dataset_versions` gained columns over time; the API adds them to existing databases automatically at start-up (additive only, never destructive).
 
-## Training and evaluation (Phase 3)
+## Training and evaluation
 - `POST /v1/experiments` validates the request, records an `experiments` row (`queued`) and starts training in a background thread of the API process. The row moves to `running`, then `completed` or `failed`; the dashboard polls it. Only one run is allowed at a time (the service is small), and runs interrupted by a restart are marked `failed` at start-up.
 - `app/training.py` builds one sklearn `Pipeline`: numeric columns pass through (XGBoost handles missing values), categorical columns are filled and one-hot encoded, then `XGBClassifier` or `XGBRegressor`. The test split is taken first; cross-validation and fitting use the training part only. Class imbalance is handled with balanced sample weights.
 - Everything shown in the dashboard comes from `experiments.metrics_json`: test metrics, baseline, bootstrap range, CV mean and spread, per-class table, confusion matrix, top features, warnings, limitations. Failures store a user-safe message.
-- The fitted pipeline is stored with `joblib` under `DATASET_STORAGE_DIR/experiments/` and never exposed over the API. Phase 4 will register approved artifacts; only load files this service wrote itself.
-- A completed experiment does not make a model available. Availability still requires the review and sign-off added in Phases 4 and 5.
+- The fitted pipeline is stored with `joblib` under `DATASET_STORAGE_DIR/experiments/` and never exposed over the API. The registry stores approved artifacts; only load files this service wrote itself.
+- A completed experiment does not make a model available. Availability still requires the review and sign-off added by the registry and serving.
 
-## Registry and review gate (Phase 4)
+## Registry and review gate
 - **Register** (`write:models`): only a `completed` experiment whose model file still exists, once. The file is copied to `models/<slug>/v<n>.joblib` under the private storage directory (immutable from then on) and its SHA-256 and size are recorded. The evaluation (`metrics_json`) is copied into the version so later edits or re-runs cannot change what was reviewed. Storage paths are never returned by the API. The registry never loads a model file; it only reads bytes.
 - **States:** `candidate → in_review → approved | rejected`; `approved → deployed → retired`. Every other transition is refused with 409. `rejected` is final.
 - **Approve** (`approve:models`): `clinical_validation_ref` (evidence reference, 5+ chars) and review notes (20+ chars) are mandatory. If the frozen evaluation holds warnings (small data, baseline not beaten, suspiciously strong result) the reviewer must set `acknowledge_warnings`. With `REQUIRE_SEPARATE_REVIEWER=true` (default) the reviewing key must differ from the key that registered and the key that submitted.
 - **Deploy** (`deploy:models`, admin): from `approved` or from `retired` with reason *superseded*. Re-verifies the stored file against its recorded hash, retires the current deployed version of the same model (*superseded*) and records who and when. **Rollback** re-deploys the most recent superseded version and retires the current one as *rolled back*; a rolled-back or withdrawn version can never be redeployed. **Retire** withdraws a version with a written reason.
 - **Catalogue status** is derived: `deployed` if any version is deployed, else `approved` if any is approved, else `in_development`.
-- **"Deployed" is a designation, not serving.** Phase 5 adds prediction endpoints that may load only the deployed version, after re-checking its hash.
+- **"Deployed" is a designation, not serving.** The prediction endpoints may load only the deployed version, after re-checking its hash.
 - Additive columns are added to `mlab_model_versions` automatically at start-up; no manual SQL migration is needed.
 
-## Serving (Phase 5)
+## Serving
 - **Only the deployed version is served**, looked up on every request, so a retire or rollback applies immediately. With none deployed the API refuses (409) and audits `prediction.refused`.
 - **Load path:** `serving.load_bundle` reads the artifact bytes, compares SHA-256 with the value recorded at registration and only then deserialises them. A mismatch returns 503 and is audited. The verified model is cached in memory per (version, hash); a restart re-verifies. This assumes the persistent disk is writable only by the API; protect it accordingly.
 - **Input contract:** features are exactly those the model was trained on. Unknown fields are rejected so identifiers cannot be sent by mistake. Missing values are allowed (XGBoost and the imputer handle them) but more than half missing, or a margin under 0.15, or a top score under 0.5, sets `low_confidence`. Unseen categories are treated as unknown and flagged.
 - **Output contract:** never a diagnosis. `kind: risk_estimate`, `decision_support_only: true`, the safety notice, model/version/approval reference, caveats (including that the model was approved with warnings, if so) and a request ID. Class scores are not calibrated probabilities and the dashboard says so.
 - **Privacy:** request bodies and results are not stored or logged. Audit detail: model, version, record count, low-confidence count, request ID.
 - **Limits:** per-key prediction limit and a per-address wrong-key counter, both in process memory (fine for one instance; use shared storage if scaled out). The wrong-key limiter protects the audit log and database from flooding; the keys themselves are 256-bit random values.
-- **Role `service`** is the machine identity used by the CNR integration (Phase 6).
+- **Role `service`** is the machine identity used by the CNR integration.
 
-## CNR integration (Phase 6)
+## CNR integration
 - **Direction and trust.** CNR is the caller. It holds a `service` key (read catalogue, predict, nothing else) as a secret and calls the lab over HTTPS. The lab never receives CNR credentials and sends CNR nothing but a reachability request.
 - **Contract `cnr-ml-contract/1`.** `GET /v1/integration/cnr/models` (feature contract of each deployed model) and `POST /v1/integration/cnr/assess/{slug}` (cases of `case_ref` + `features`, max 50). Results come back in request order with the `case_ref` echoed. The version string changes only for breaking changes.
 - **One code path.** Assessments call `routers/predict.run_prediction`, the same function as `/v1/predict`: per-key rate limit, deployed version only, SHA-256 check before loading, strict features, counts-only audit. The only differences are the audit action (`integration.assess`, with `channel: cnr` and an optional correlation ID) and the per-case envelope.
@@ -50,10 +50,10 @@ Model artifacts and datasets are **not** stored in Postgres or git. Phase 2 stor
 - **Outbound check.** `integration.probe` makes one GET to `CNR_API_BASE_URL` + `CNR_API_HEALTH_PATH`. The address comes only from the environment (no request can change it, so there is no server-side request forgery surface), must be https in production, may not embed credentials, sends no Authorization header or body and does not follow redirects. Any HTTP answer counts as reachable. It is admin-only, limited to 6 per minute and audited.
 - **Status** (`read:integration`, admin): configuration problems, active service keys with last use, deployed models, 24-hour counts of assessments and refusals.
 - **Lab -> CNR events.** `app/webhook.py` sends `model.deployed`, `model.rolled_back` and `model.retired` to `CNR_WEBHOOK_URL`, signed with HMAC-SHA256 over `<timestamp>.<body>` (secret `CNR_WEBHOOK_SECRET`, 32+ chars, https required in production, no embedded credentials, redirects not followed). Payload: slug, version, event ID, time, and a reason category only (never free text). Delivery is a background thread with three attempts and never blocks or fails a deploy; the outcome is audited as `integration.notify` and counted on the status page. Events are hints: the lab remains the authority through the 409 it returns when nothing is deployed.
-- **Not in this phase.** No bulk transfer of CNR records into the lab and no calls from the lab into CNR's data endpoints; that would need a separate de-identification and approval design. Treat these as open decisions with the data owner.
+- **Out of scope.** No bulk transfer of CNR records into the lab and no calls from the lab into CNR's data endpoints; that would need a separate de-identification and approval design. Treat these as open decisions with the data owner.
 - **Known limits.** The rate limit is per process (single instance). There is no per-caller allow-list of IP addresses; the service key is the only credential, so keep it in CNR's secret store and rotate it by revoking and re-creating it under Access.
 
-## Dataset ingestion (Phase 2)
+## Dataset ingestion
 1. **Inspect** (`/v1/datasets/inspect`): the file is parsed in memory, typed, scanned for identifiers and profiled. Nothing is stored. Values of flagged columns are never returned.
 2. **Create version** (`/v1/datasets/{id}/versions`): the file is parsed again, the reviewed plan is applied, and only the resulting table is stored. The raw upload is discarded. Re-uploading an identical file is rejected.
 3. **Rules enforced server-side:** direct identifiers need a written reason to keep; columns whose values contain emails or phone numbers can never be kept; pseudonymisation uses an HMAC key from the environment; categorical counts under 5 are suppressed in profiles; a k-anonymity check is run over quasi-identifiers (sex, district, age, dates) and warned on when the smallest group is under 5.
@@ -62,10 +62,10 @@ Model artifacts and datasets are **not** stored in Postgres or git. Phase 2 stor
 
 ## Security
 - Keys are 256-bit random values, stored only as SHA-256 hashes, shown once at creation, individually revocable.
-- Denied requests, key changes and (from Phase 2) uploads, training runs and predictions are written to the audit log. Secrets and request bodies are never logged.
+- Denied requests, key changes and uploads, training runs and predictions are written to the audit log. Secrets and request bodies are never logged.
 - `/docs` and `/openapi.json` are disabled when `ENVIRONMENT=production`. CORS is restricted to the dashboard origin.
-- Phase 2 adds `read:dataset_rows` (data_scientist and admin only) for row previews; viewers see only metadata. Audit detail for uploads holds counts, hashes and the approval reference, never rows, file names or cell values.
-- Known limits: rate limits are per process (Phase 5), and the dashboard keeps the key in `sessionStorage` (cleared on tab close). Per-user login remains open.
+- `read:dataset_rows` (data_scientist and admin only) allows row previews; viewers see only metadata. Audit detail for uploads holds counts, hashes and the approval reference, never rows, file names or cell values.
+- Known limits: rate limits are per process, and the dashboard keeps the key in `sessionStorage` (cleared on tab close). Per-user login remains open.
 
-## Deployment gate (enforced since Phase 4)
+## Deployment gate
 Candidate → clinical review (external validation evidence recorded) → approved → deployed, with rollback to the previous approved version. Human oversight remains mandatory for any clinical decision.

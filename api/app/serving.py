@@ -1,4 +1,4 @@
-"""Prediction serving (Phase 5).
+"""Prediction serving.
 
 Only the single *deployed* version of a model is ever served. Its file is read as bytes, hashed against the
 SHA-256 recorded at registration and only then loaded, so a file that changed on disk is never executed.

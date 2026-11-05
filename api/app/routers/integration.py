@@ -1,4 +1,4 @@
-"""CNR integration endpoints (Phase 6).
+"""CNR integration endpoints.
 
 CNR calls these with a `service` key. They add no new modelling rules: assessments go through the same
 code as /v1/predict (deployed version only, hash check, strict features, rate limit, counts-only audit).
