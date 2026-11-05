@@ -118,3 +118,17 @@ def test_one_at_a_time(client, ds):
 def test_audit_has_no_data(client):
     log = client.get("/v1/audit?limit=200", headers=ADMIN).text
     assert "experiment.created" in log and "experiment.completed" in log and "Zomba" not in log
+
+
+def test_no_signal_is_called_out(client):
+    rng = np.random.default_rng(5)
+    rows = ["x1,x2,label"] + [f"{rng.normal():.3f},{rng.normal():.3f},{rng.choice(['a', 'b'])}" for _ in range(300)]
+    d = client.post("/v1/datasets", json={"name": "noise-ds"}, headers=ADMIN).json()
+    r = client.post(f"/v1/datasets/{d['id']}/versions", headers=ADMIN, data={"approval_ref": "TEST-009"},
+                    files={"file": ("n.csv", "\n".join(rows) + "\n", "text/csv")})
+    assert r.status_code == 201, r.text
+    e = train(client, d["id"], target="label", exclude=[])
+    assert e["status"] == "completed"
+    b = e["metrics_json"]["baseline"]
+    assert b["macro_f1"] >= max(b["majority_macro_f1"], b["chance_macro_f1"]) - 1e-9 and b["chance_macro_f1"] > 0.4
+    assert any("does not clearly beat the baseline" in w for w in e["metrics_json"]["warnings"])

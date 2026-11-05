@@ -166,6 +166,11 @@ def run(df: pd.DataFrame, cfg: Config) -> tuple[dict, dict]:
         main = float(f.mean())
         base_pred = np.full(len(yte), np.bincount(ytr).argmax())
         bf = precision_recall_fscore_support(yte, base_pred, labels=labels, zero_division=0)[2]
+        # A second, fairer baseline: guessing in proportion to class frequency. For balanced classes the
+        # "most common class" baseline is unrealistically weak (macro F1 about 0.33 for two classes).
+        prior = np.bincount(ytr, minlength=k) / len(ytr)
+        chance = float(np.mean([precision_recall_fscore_support(yte, rng.choice(k, size=len(yte), p=prior),
+                                                                labels=labels, zero_division=0)[2].mean() for _ in range(200)]))
         boots = []
         for _ in range(300):
             i = rng.integers(0, len(yte), len(yte))
@@ -174,8 +179,11 @@ def run(df: pd.DataFrame, cfg: Config) -> tuple[dict, dict]:
                 "macro_f1": round(main, 4), "macro_precision": round(float(p.mean()), 4), "macro_recall": round(float(r.mean()), 4),
                 "roc_auc": None if auc is None else round(auc, 4),
                 "macro_f1_ci95": [round(float(np.percentile(boots, 2.5)), 4), round(float(np.percentile(boots, 97.5)), 4)]}
-        baseline = {"strategy": "always predict the most common class", "accuracy": round(float((base_pred == yte).mean()), 4),
-                    "macro_f1": round(float(bf.mean()), 4), "balanced_accuracy": round(1 / k, 4)}
+        base_f1 = max(float(bf.mean()), chance)
+        baseline = {"strategy": "the better of: always the most common class, or guessing by class frequency",
+                    "accuracy": round(float((base_pred == yte).mean()), 4), "macro_f1": round(base_f1, 4),
+                    "majority_macro_f1": round(float(bf.mean()), 4), "chance_macro_f1": round(chance, 4),
+                    "balanced_accuracy": round(1 / k, 4)}
         cvr = {"folds": folds}
         for key in ("accuracy", "balanced_accuracy", "macro_f1"):
             cvr[key + "_mean"], cvr[key + "_sd"] = _ms(cv["test_" + key])
@@ -218,8 +226,10 @@ def run(df: pd.DataFrame, cfg: Config) -> tuple[dict, dict]:
     if headline >= 0.97 or (importance and importance[0]["share"] >= 0.7):
         warnings.append("Suspiciously strong result" + (f" (one feature, '{importance[0]['feature']}', carries {importance[0]['share']:.0%} of the model)" if importance else "")
                         + ". Check for features that are derived from the label or measured after it, such as the measurements a nutrition status is calculated from. Exclude them and retrain.")
-    if headline <= base_headline + 0.02:
-        warnings.append("The model does not clearly beat the trivial baseline. It has not learned a useful pattern from these features.")
+    ci_low = test["macro_f1_ci95"][0] if clf else None
+    if headline <= base_headline + 0.02 or (ci_low is not None and ci_low <= base_headline):
+        warnings.append("The model does not clearly beat the baseline: the baseline score sits inside the 95% range or above the result. "
+                        "It has not shown that it learned a useful pattern from these features.")
     if abs(headline - cv_headline) > 0.15:
         warnings.append("Cross-validation and test scores differ a lot, a sign of instability on this amount of data.")
 

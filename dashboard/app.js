@@ -89,7 +89,7 @@
     const [models, sets] = await Promise.all([api("/v1/catalog"), api("/v1/datasets")]);
     const usable = sets.filter((d) => d.version_count > 0);
     if (!usable.length) return [h("h1", null, "New experiment"), empty("No dataset versions yet", "Create a dataset and upload a file under Datasets first.")];
-    const model = h("select", { id: "xm" }, models.map((m) => h("option", { value: m.slug }, m.name + " (" + m.task_type + ")")));
+    const model = h("select", { id: "xm" }, [h("option", { value: "" }, "Choose a model…")].concat(models.map((m) => h("option", { value: m.slug }, m.name + " (" + m.task_type + ")"))));
     const dset = h("select", { id: "xd" }, usable.map((d) => h("option", { value: d.id }, d.name)));
     const ver = h("select", { id: "xv" });
     const target = h("select", { id: "xt" });
@@ -102,7 +102,7 @@
     const cols = () => (versions.find((v) => String(v.version) === ver.value) || { schema_info: { columns: [] } }).schema_info.columns || [];
     const drawCols = () => {
       const prev = target.value, names = cols().map((c) => c.name);
-      target.replaceChildren(...names.map((n) => h("option", { value: n, selected: n === prev }, n)));
+      target.replaceChildren(h("option", { value: "" }, "Choose the column to predict…"), ...names.map((n) => h("option", { value: n, selected: n === prev }, n)));
       drawExcl();
     };
     const drawExcl = () => excl.replaceChildren(...cols().filter((c) => c.name !== target.value).map((c) =>
@@ -116,7 +116,10 @@
     dset.addEventListener("change", loadVersions); ver.addEventListener("change", drawCols); target.addEventListener("change", drawExcl);
     await loadVersions();
     const go = h("button", { class: "primary", onclick: async () => {
-      err.textContent = ""; go.disabled = true;
+      err.textContent = "";
+      if (!model.value) { err.textContent = "Choose a model."; return; }
+      if (!target.value) { err.textContent = "Choose the column to predict."; return; }
+      go.disabled = true;
       try {
         const body = { model_slug: model.value, dataset_id: Number(dset.value), version: Number(ver.value), target: target.value,
           exclude: [...excl.querySelectorAll("input:checked")].map((i) => i.value), n_estimators: Number(trees.value), max_depth: Number(depth.value),
@@ -155,6 +158,7 @@
       out.push(h("h2", null, "Hold-out test (" + m.n_test + " rows)"),
         h("div", { class: "stats" }, stat("Macro F1", n3(t.macro_f1), "95% range " + n3(t.macro_f1_ci95 && t.macro_f1_ci95[0]) + "–" + n3(t.macro_f1_ci95 && t.macro_f1_ci95[1])),
           stat("Baseline macro F1", n3(b.macro_f1), b.strategy), stat("Balanced accuracy", pct(t.balanced_accuracy)), stat("Accuracy", pct(t.accuracy)), stat("ROC AUC", n3(t.roc_auc))),
+        h("p", { class: "muted" }, "Baselines: always the most common class " + n3(b.majority_macro_f1) + ", guessing by class frequency " + n3(b.chance_macro_f1) + ". The model has to beat the higher one, with its 95% range clear of it."),
         h("p", { class: "muted" }, "Cross-validation on the training part (" + cv.folds + " folds): macro F1 " + n3(cv.macro_f1_mean) + " ± " + n3(cv.macro_f1_sd) + ", balanced accuracy " + n3(cv.balanced_accuracy_mean) + " ± " + n3(cv.balanced_accuracy_sd) + "."));
       out.push(h("h2", null, "Per class"), table(["Class", "Precision", "Recall", "F1", "Test cases"], Object.entries(m.per_class || {}).map(([k, v]) => [k, v.precision, v.recall, v.f1, v.support])));
       const cm = m.confusion_matrix || { labels: [], matrix: [] };
