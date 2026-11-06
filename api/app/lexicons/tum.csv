@@ -1,0 +1,5 @@
+term,norm,label,group,lang,case_sensitive
+# Tumbuka seed terms. Add more rows from Tumbuka speakers.
+Ŵana,child,POPULATION,age or state,tum,
+somba,fish,FOOD,animal source,tum,
+ufwa,flour,FOOD,cereal,tum,

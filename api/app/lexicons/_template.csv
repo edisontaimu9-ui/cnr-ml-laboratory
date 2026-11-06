@@ -1,0 +1,3 @@
+term,norm,label,group,lang,case_sensitive
+# Template: copy to tum.csv or yao.csv. Files starting with _ are ignored.
+example,normalised form,FOOD,cereal,yao,

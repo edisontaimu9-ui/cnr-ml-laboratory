@@ -16,3 +16,6 @@ datasets/
 *.joblib
 *.csv
 *.xlsx
+
+# Speaker-supplied language term lists ship with the app
+!api/app/lexicons/*.csv
