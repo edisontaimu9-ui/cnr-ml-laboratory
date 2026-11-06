@@ -306,3 +306,22 @@ class MeOut(BaseModel):
     name: str
     role: str
     permissions: list[str]
+
+
+class MatchingEvaluate(BaseModel):
+    """Evaluation of food-name matching. Two dataset versions: labelled queries and the registry food list.
+    Column names are chosen by the caller; avoid names ending in _id or containing 'name' (the upload step drops them as identifiers)."""
+    queries_dataset_id: int
+    queries_version: int | None = None
+    query_column: str = Field(max_length=200)
+    food_code_column: str = Field(max_length=200)
+    group_column: str | None = Field(default=None, max_length=200)          # for example language or source
+    registry_dataset_id: int
+    registry_version: int | None = None
+    registry_code_column: str = Field(max_length=200)
+    registry_label_column: str = Field(max_length=200)
+    registry_aliases_column: str | None = Field(default=None, max_length=200)   # aliases separated by ; or |
+    test_size: float = Field(default=0.25, ge=0.1, le=0.4)
+    seed: int = Field(default=42, ge=0, le=2**31 - 1)
+    top_k: int = Field(default=5, ge=1, le=10)
+    target_accuracy: float = Field(default=0.95, ge=0.5, le=0.999)
