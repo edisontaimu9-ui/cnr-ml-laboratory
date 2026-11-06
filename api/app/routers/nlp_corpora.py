@@ -8,17 +8,21 @@ import hashlib
 import json
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi.responses import Response
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from .. import audit, nlp_corpus, nlp_formats, storage
+from .. import audit, nlp_corpus, nlp_formats, nlp_prelabel, storage
+from ..config import get_settings
 from ..db import get_db
 from ..models import NlpCorpus, NlpCorpusVersion
+from ..ratelimit import SlidingWindow
 from ..security import Principal, require
 from .datasets import _read_upload
 
 router = APIRouter(prefix="/v1/nlp/corpora", tags=["nlp"])
+_limiter = SlidingWindow(get_settings().rate_limit_predict_per_min, 60)
 
 FORMAT = {"formats": nlp_formats.FORMATS,
           "choose": "Set `format` to one of the codes above, or leave it as auto to go by the file extension (.jsonl .json .csv .bio .iob .iob2 .conll .spacy .zip).",
@@ -102,6 +106,35 @@ def _store(db: Session, corpus: NlpCorpus, res: dict, raw: bytes, ref: str, p: P
 @router.get("/format", dependencies=[Depends(require("read:datasets"))])
 def corpus_format():
     return FORMAT
+
+
+@router.get("/template", dependencies=[Depends(require("read:datasets"))])
+def annotation_template():
+    """A blank annotation sheet with one example row each for English, Chichewa, Tumbuka and Yao. Delete the example rows before uploading."""
+    return Response(nlp_prelabel.template_csv(), media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": 'attachment; filename="cnr-nlp-annotation-template.csv"'})
+
+
+@router.post("/prelabel")
+async def prelabel(request: Request, file: UploadFile = File(...), lang: str | None = Form(None),
+                   p: Principal = Depends(require("run:nlp")), db: Session = Depends(get_db)):
+    """Upload plain sentences (.txt, one per line, or a .csv with a text column) and get back an annotation CSV holding the engine's
+    guesses for speakers to correct. Nothing is stored. A file with identifiers is refused whole."""
+    if not _limiter.hit(str(p.key_id)):
+        raise HTTPException(429, "Too many requests. Wait a moment.", headers={"Retry-After": str(_limiter.retry_after(str(p.key_id)))})
+    lang = (lang or "").strip().lower() or None
+    if lang is not None and lang not in nlp_corpus.LANG_CODES:
+        raise HTTPException(422, "lang must be one of " + ", ".join(sorted(nlp_corpus.LANG_CODES)))
+    try:
+        res = nlp_prelabel.prelabel(await _read_upload(file), file.filename or "", lang)
+    except (nlp_prelabel.PrelabelError, nlp_formats.FormatError) as e:
+        audit.record(db, "nlp.prelabel_rejected", principal=p, request=request, detail={"reason": str(e)[:200]})
+        raise HTTPException(422, str(e))
+    audit.record(db, "nlp.prelabel", principal=p, request=request, resource_type="nlp_corpus", detail=res["report"])
+    return Response(res["csv"], media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": 'attachment; filename="cnr-nlp-prelabel.csv"',
+                             "X-Prelabel-Documents": str(res["report"]["documents"]),
+                             "X-Prelabel-Guessed-Entities": str(res["report"]["guessed_entities"])})
 
 
 @router.post("/inspect")
