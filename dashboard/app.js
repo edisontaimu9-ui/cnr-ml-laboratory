@@ -313,6 +313,8 @@
     const err = h("p", { class: "error", role: "alert" });
     const num = (id, v, min, max, step) => h("input", { id, type: "number", value: v, min, max, step: step || 1 });
     const mc = h("input", { id: "emc", type: "checkbox", checked: true }), ma = h("input", { id: "ema", type: "checkbox", checked: true });
+    const cm = h("input", { id: "ecm", type: "checkbox" });
+    cm.addEventListener("change", () => { if (cm.checked) { mc.checked = true; ma.checked = false; } });
     const kmin = num("ekmin", 2, 2, 12), kmax = num("ekmax", 8, 2, 12), kfix = num("ek", "", 2, 12);
     const share = num("efs", 5, 0.5, 20, 0.5), top = num("etop", 20, 5, 100), seed = num("es", 42, 0, 2147483647);
     const note = h("textarea", { id: "en", rows: 2, maxlength: 500, placeholder: "Optional: why you are looking at this data. Do not type names or ID numbers." });
@@ -333,7 +335,7 @@
       if (Number(kmin.value) > Number(kmax.value)) { err.textContent = "The smallest number of groups cannot be larger than the largest."; return; }
       go.disabled = true;
       try {
-        const body = { dataset_id: Number(dset.value), version: Number(ver.value), methods, exclude: [...excl.querySelectorAll("input:checked")].map((i) => i.value),
+        const body = { dataset_id: Number(dset.value), version: Number(ver.value), methods, preset: cm.checked ? "cardiometabolic" : null, exclude: [...excl.querySelectorAll("input:checked")].map((i) => i.value),
           k_min: Number(kmin.value), k_max: Number(kmax.value), flag_share: Number(share.value) / 100, report_top: Number(top.value), seed: Number(seed.value), note: note.value.trim() };
         if (kfix.value !== "") body.k = Number(kfix.value);
         const x = await api("/v1/explorations", { method: "POST", body: JSON.stringify(body) });
@@ -344,6 +346,7 @@
       h("div", { class: "notice" }, "Leave out identifier-like columns and any outcome or label column (for example a nutrition status, or the measurements it is calculated from). Otherwise the groups simply reproduce that column. This analysis produces no model and nothing from it can be deployed."),
       h("div", { class: "form3" }, field("Dataset", dset, "ed"), field("Version", ver, "ev")),
       h("label", null, "Columns to leave out"), excl,
+      h("div", null, h("label", { for: "ecm" }, "Cardiometabolic phenotypes preset (clustering of waist, BMI, blood pressure, glucose, lipids, diet; checks the columns you chose)"), cm),
       h("div", { class: "form3" }, h("div", null, h("label", { for: "emc" }, "Look for groups (clustering)"), mc), h("div", null, h("label", { for: "ema" }, "Look for unusual rows (anomaly detection)"), ma)),
       h("details", { class: "card" }, h("summary", null, "Settings"),
         h("div", { class: "form3" }, field("Fewest groups to try", kmin, "ekmin"), field("Most groups to try", kmax, "ekmax"), field("Or set the number of groups (optional)", kfix, "ek")),
@@ -390,6 +393,14 @@
     (r.warnings || []).forEach((w) => out.push(h("div", { class: "notice" }, w)));
     out.push(h("p", { class: "muted" }, r.n_rows + " rows" + (r.sampled ? " (fitted on a sample of " + r.n_used + ")" : "") + " · " + [...(r.features.numeric || []), ...(r.features.categorical || [])].length + " columns used."));
     const c = r.clustering, a = r.anomaly;
+    if (r.preset) {
+      const mg = r.preset.marker_groups || {};
+      out.push(h("h2", null, "Cardiometabolic phenotypes"),
+        h("div", { class: "card" },
+          h("p", null, Object.keys(mg).length ? Object.entries(mg).map(([g, cs]) => g.replace("_", " ") + ": " + cs.join(", ")).join(" · ") : "No cardiometabolic measurements recognised."),
+          (r.preset.not_recognised || []).length ? h("p", { class: "muted" }, "Used but not recognised as a cardiometabolic measurement: " + r.preset.not_recognised.join(", ")) : null,
+          h("ul", { class: "plain" }, (r.preset.notes || []).map((q) => h("li", null, q)))));
+    }
     if (c) {
       out.push(h("h2", null, "Groups (k-means, " + c.k + " groups)"), h("div", { class: "notice" }, h("b", null, (structureLabel[c.structure] || c.structure) + ". "), c.structure_summary),
         h("div", { class: "stats" }, stat("Silhouette", n3(c.quality.silhouette), "shuffled-data reference " + n3(c.reference.silhouette)),

@@ -131,9 +131,12 @@ class ExplorationCreate(BaseModel):
     report_top: int = Field(default=20, ge=5, le=100)
     seed: int = Field(default=42, ge=0, le=2**31 - 1)
     note: str = Field(default="", max_length=500)
+    preset: Literal["cardiometabolic"] | None = None           # cardiometabolic phenotypes: clustering of measurements, never a model
 
     @model_validator(mode="after")
     def _check(self):
+        if self.preset and "methods" not in self.model_fields_set:
+            self.methods = ["clustering"]                       # phenotypes are about groups; anomaly detection stays opt-in
         if self.k_min > self.k_max:
             raise ValueError("k_min cannot be larger than k_max")
         if len(set(self.methods)) != len(self.methods):

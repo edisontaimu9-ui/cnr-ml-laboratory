@@ -74,14 +74,14 @@ def create_exploration(body: ExplorationCreate, request: Request, background: Ba
         raise HTTPException(409, "Another experiment or exploration is still running. Wait for it to finish.")
     cfg = exploration.Config(features=body.features, exclude=body.exclude, methods=body.methods, k=body.k,
                              k_min=body.k_min, k_max=body.k_max, flag_share=body.flag_share,
-                             report_top=body.report_top, seed=body.seed)
+                             report_top=body.report_top, seed=body.seed, preset=body.preset)
     x = Exploration(dataset_version_id=v.id, status="queued", created_by=p.name,
                     params_json={"config": asdict(cfg), "dataset_id": v.dataset_id, "dataset_version": v.version,
                                  "note": body.note.strip()})
     db.add(x)
     db.commit()
     audit.record(db, "exploration.created", principal=p, request=request, resource_type="exploration", resource_id=x.id,
-                 detail={"dataset": v.dataset_id, "version": v.version, "methods": body.methods})
+                 detail={"dataset": v.dataset_id, "version": v.version, "methods": body.methods, "preset": body.preset})
     background.add_task(run_exploration, x.id)
     return _out(x, detail=True)
 

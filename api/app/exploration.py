@@ -15,6 +15,7 @@ Honesty rules, in the same spirit as `training.py`
 - Group profiles are aggregates over at least MIN_GROUP_REPORT rows; smaller groups are suppressed. Flagged rows are
   identified by position only, with reasons given as standardised deviations, never as raw values or category names.
 """
+import re
 import warnings as pywarnings
 from dataclasses import dataclass, field
 
@@ -48,6 +49,24 @@ LIMITATIONS = [
 ]
 
 
+PRESETS = ("cardiometabolic",)
+
+# Cardiometabolic marker groups, recognised from column names (whole words, or substrings of the run-together name).
+MARKER_GROUPS = {
+    "adiposity": ({"bmi", "whr", "hip", "waist", "weight", "bodyfat"}, ("waist", "bodyfat", "adipos")),
+    "blood_pressure": ({"sbp", "dbp", "bp", "map", "systolic", "diastolic"}, ("bloodpressure", "systolic", "diastolic")),
+    "glucose": ({"hba1c", "a1c", "fpg", "fbg", "fbs", "rbs", "ogtt", "glucose", "insulin", "homa"}, ("hba1c", "glucose", "homair")),
+    "lipids": ({"tg", "hdl", "ldl", "chol", "cholesterol", "triglycerides", "lipid"}, ("triglycer", "cholesterol", "lipid")),
+    "lifestyle": ({"salt", "sugar", "alcohol", "smoking", "tobacco", "activity", "sedentary", "sleep", "fruit", "vegetable", "diet"},
+                  ("physicalactivity", "sugary", "fruitveg")),
+}
+# Columns that carry an already-assigned label, diagnosis, outcome or treatment: groups built on them just reproduce it.
+LABEL_LIKE = ("syndrome", "diagnos", "outcome", "label", "prediab", "hypertens", "diabetes_status", "diabetic", "metformin",
+              "statin", "antihypert", "treatment", "medication", "riskclass", "risk_class")
+HIGH_CORR = 0.9
+DOMINANCE = 0.6
+
+
 class ExplorationError(ValueError):
     """Message is safe to show to the user."""
 
@@ -63,6 +82,7 @@ class Config:
     flag_share: float = 0.05
     report_top: int = 20
     seed: int = 42
+    preset: str | None = None                  # None | "cardiometabolic" (see _preset)
 
 
 # ---------- preparation ----------
@@ -118,6 +138,69 @@ def _clean(df: pd.DataFrame, num: list[str], cat: list[str]) -> pd.DataFrame:
 
 def _r(x, nd: int = 4):
     return None if x is None or (isinstance(x, float) and not np.isfinite(x)) else round(float(x), nd)
+
+
+# ---------- cardiometabolic preset ----------
+
+def _marker_group(col: str) -> str | None:
+    low = col.lower()
+    words = {w for w in re.split(r"[^a-z0-9]+", low) if w}
+    flat = low.replace("_", "").replace(" ", "")
+    for name, (tokens, subs) in MARKER_GROUPS.items():
+        if words & tokens or any(sub in flat for sub in subs):
+            return name
+    return None
+
+
+def _preset(data: pd.DataFrame, num: list[str], cat: list[str], warnings: list[str]) -> dict:
+    """Cardiometabolic phenotyping: checks that the columns suit it and says what the groups can and cannot mean.
+    Everything here is a written note; it changes no fitted result."""
+    cols = num + cat
+    groups: dict[str, list[str]] = {}
+    other: list[str] = []
+    for c in cols:
+        g = _marker_group(c)
+        (groups.setdefault(g, []) if g else other).append(c)
+    notes: list[str] = []
+    label_like = [c for c in cols if any(t in c.lower().replace(" ", "_") for t in LABEL_LIKE)]
+    if label_like:
+        warnings.append(f"'{label_like[0][:60]}' looks like an already-assigned diagnosis, label, outcome or treatment"
+                        + (f" (and {len(label_like) - 1} more)" if len(label_like) > 1 else "")
+                        + ". Groups that include it mostly reproduce that column instead of finding patterns in the measurements. Leave it out and "
+                        "compare the groups with it afterwards.")
+    if not groups:
+        warnings.append("No cardiometabolic measurements were recognised from the column names (waist, BMI, blood pressure, glucose or HbA1c, "
+                        "lipids, diet or activity). The groups may describe something else, such as age or place.")
+    elif len(groups) == 1:
+        warnings.append(f"Only one kind of cardiometabolic measurement was recognised ({next(iter(groups)).replace('_', ' ')}). Phenotypes "
+                        "built on one axis are just bands of that measurement.")
+    sizes = {g: len(v) for g, v in groups.items()}
+    total = sum(sizes.values())
+    if len(groups) > 1 and total >= 4:
+        big = max(sizes, key=sizes.get)
+        if sizes[big] / total > DOMINANCE:
+            warnings.append(f"{sizes[big]} of the {total} recognised measurements are {big.replace('_', ' ')} columns. K-means weights every column equally, "
+                            "so these will dominate the groups. Consider keeping one or two of them.")
+    nums = [c for c in num if data[c].notna().sum() >= 20 and data[c].nunique() > 1]
+    pairs = []
+    if len(nums) >= 2:
+        corr = data[nums].corr(method="spearman").abs()
+        for i, a in enumerate(nums):
+            for b in nums[i + 1:]:
+                v = corr.loc[a, b]
+                if np.isfinite(v) and v >= HIGH_CORR:
+                    pairs.append((a, b, float(v)))
+    pairs.sort(key=lambda t: -t[2])
+    if pairs:
+        shown = "; ".join(f"{a} and {b} (rho {v:.2f})" for a, b, v in pairs[:3])
+        warnings.append(f"Some columns move almost together: {shown}. Measuring the same thing twice doubles its weight in the groups. "
+                        "Keep one of each pair.")
+    notes.append("Phenotypes are descriptive patterns of measurements in this dataset. They are not disease classes, risk tiers or a "
+                 "metabolic syndrome definition, and a group should not be named or treated as one.")
+    notes.append("Age, sex and body size often drive the groups. Check each group's profile for that before reading it as a metabolic pattern.")
+    return {"name": "cardiometabolic", "marker_groups": {g: groups[g] for g in sorted(groups)}, "not_recognised": other,
+            "label_like_columns": label_like, "correlated_pairs": [{"a": a, "b": b, "rho": _r(v, 2)} for a, b, v in pairs[:10]],
+            "notes": notes}
 
 
 # ---------- clustering ----------
@@ -316,8 +399,11 @@ def run(df: pd.DataFrame, cfg: Config) -> dict:
     warnings: list[str] = []
     if len(df) < MIN_ROWS:
         raise ExplorationError(f"Too few rows ({len(df)}). At least {MIN_ROWS} are needed.")
+    if cfg.preset is not None and cfg.preset not in PRESETS:
+        raise ExplorationError("Unknown preset. Choose cardiometabolic or leave it empty.")
     num, cat = _columns(df, cfg, warnings)
     data = _clean(df, num, cat)
+    preset = _preset(data, num, cat, warnings) if cfg.preset == "cardiometabolic" else None
     pre = _encoder(num, cat)
     n = len(data)
     with pywarnings.catch_warnings():
@@ -360,5 +446,5 @@ def run(df: pd.DataFrame, cfg: Config) -> dict:
     return {"kind": "exploration", "deployable": False, "notice": NOTICE, "methods": list(cfg.methods),
             "n_rows": int(n), "n_used": int(len(Xw)), "sampled": bool(sampled),
             "features": {"numeric": num, "categorical": cat},
-            "clustering": clustering, "anomaly": anomaly, "projection": projection,
+            "clustering": clustering, "anomaly": anomaly, "projection": projection, "preset": preset,
             "warnings": warnings, "limitations": LIMITATIONS}
