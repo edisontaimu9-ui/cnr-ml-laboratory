@@ -122,3 +122,65 @@ UNCERTAIN_BEFORE = ["possible", "probable", "suspected", "suspect", "likely", "q
 HISTORICAL_BEFORE = ["history of", "h/o", "previous", "previously", "past", "resolved"]
 FAMILY_BEFORE = ["family history", "fh", "mother has", "father has", "mother had", "father had", "sibling"]
 SCOPE_BREAKERS = {"but", "however", "although", "except", "koma", "while", "though"}
+
+
+# ---------------------------------------------------------------- languages and speaker-supplied lists
+import csv  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+LEXICON_DIR = Path(__file__).parent / "lexicons"
+LANGS = {
+    "en": {"name": "English", "support": "Terminology lists and patterns."},
+    "ny": {"name": "Chichewa", "support": "Terminology lists; only the listed word forms are found."},
+    "tum": {"name": "Tumbuka", "support": "Framework and a very small seed list. Needs terms from Tumbuka speakers (lexicons/tum.csv)."},
+    "yao": {"name": "Yao (Chiyao)", "support": "Framework only, no terms yet. Needs terms from Yao speakers (lexicons/yao.csv)."},
+}
+ENTRY_LANGS = {"en", "ny", "both", "tum", "yao"}       # "both" means English and Chichewa
+_BLOCKED = {"MEASUREMENT", "PHI"}
+
+
+def load_csv_lexicons(directory: Path = LEXICON_DIR) -> tuple[list[dict], dict[str, set[str]], list[str]]:
+    """Reads `*.csv` terminology files (columns: term,label,lang, optional norm,group,case_sensitive) and `markers.csv`
+    (lang,word: common words that signal a language). Bad rows are skipped and reported, never fatal. Files starting with
+    `_` are templates and are ignored; lines starting with `#` are comments."""
+    entries: list[dict] = []
+    markers: dict[str, set[str]] = {}
+    errors: list[str] = []
+    if not directory.is_dir():
+        return entries, markers, errors
+    for path in sorted(directory.glob("*.csv")):
+        if path.name.startswith("_"):
+            continue
+        with path.open(encoding="utf-8-sig", newline="") as f:
+            lines = [ln for ln in f if ln.strip() and not ln.lstrip().startswith("#")]
+        for n, row in enumerate(csv.DictReader(lines), start=2):
+            row = {(k or "").strip().lower(): (v or "").strip() for k, v in row.items()}
+            where = f"{path.name} row {n}"
+            if path.name == "markers.csv":
+                lang, word = row.get("lang", ""), row.get("word", "").lower()
+                if lang not in LANGS or lang in ("en", "ny") or not word or " " in word:
+                    errors.append(f"{where}: needs lang (tum or yao) and one word")
+                else:
+                    markers.setdefault(lang, set()).add(word)
+                continue
+            term, label, lang = row.get("term", ""), row.get("label", "").upper(), row.get("lang", "")
+            if not term or len(term) > 60:
+                errors.append(f"{where}: term is empty or longer than 60 characters")
+            elif label not in LABELS or label in _BLOCKED:
+                errors.append(f"{where}: label must be one of " + ", ".join(k for k in LABELS if k not in _BLOCKED))
+            elif lang not in ENTRY_LANGS:
+                errors.append(f"{where}: lang must be one of " + ", ".join(sorted(ENTRY_LANGS)))
+            else:
+                entries.append({"term": term, "norm": row.get("norm") or term, "label": label, "group": row.get("group") or "listed",
+                                "lang": lang, "case_sensitive": row.get("case_sensitive", "").lower() in ("1", "true", "yes"),
+                                "reviewed": False, "source": path.name})
+    return entries, markers, errors
+
+
+_CSV_ENTRIES, MARKERS, LOAD_ERRORS = load_csv_lexicons()
+_base_entries = entries
+
+
+def entries() -> list[dict]:                                         # noqa: F811
+    """Built-in English and Chichewa terms plus any speaker-supplied terms from lexicons/*.csv."""
+    return _base_entries() + [dict(e) for e in _CSV_ENTRIES]

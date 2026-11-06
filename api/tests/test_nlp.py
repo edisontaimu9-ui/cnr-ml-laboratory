@@ -203,3 +203,37 @@ def test_lexicon_listing(client):
     assert any(t["norm"] == "diarrhoea" for t in client.get("/v1/nlp/lexicon?q=tsegula", headers=ADMIN).json()["terms"])
     info = client.get("/v1/nlp/info", headers=ADMIN).json()
     assert info["lexicon"]["clinically_reviewed"] == 0 and info["kind"] == "rule-based baseline"
+
+
+# ---------------------------------------------------------------- Tumbuka and Yao (speaker-supplied CSV lists)
+def test_tumbuka_seed_terms_and_language():
+    r = nlp_lab.analyze("Ŵana wakulya somba na ufwa.")
+    assert r["language"]["overall"] == "tum"
+    assert {(e["norm"], e["lang"]) for e in r["entities"]} == {("child", "tum"), ("fish", "tum"), ("flour", "tum")}
+    assert nlp_lab.analyze("Mwana akudya nsima koma sakudya nyama.")["language"]["overall"] == "ny"   # Chichewa is not mistaken for Tumbuka
+
+
+def test_csv_lexicon_loader_accepts_good_rows_and_reports_bad_ones(tmp_path):
+    from app import nlp_lexicon as lx
+    (tmp_path / "yao.csv").write_text("# comment\nterm,norm,label,group,lang,case_sensitive\n"
+                                      "ugali,porridge,FOOD,cereal,yao,\n"
+                                      ",nothing,FOOD,,yao,\n"
+                                      "x,y,MEASUREMENT,,yao,\n"
+                                      "x,y,FOOD,,klingon,\n"
+                                      "ABC,thing,CONDITION,,yao,yes\n", encoding="utf-8")
+    (tmp_path / "markers.csv").write_text("lang,word\nyao,ni\nen,the\nyao,two words\n", encoding="utf-8")
+    (tmp_path / "_template.csv").write_text("term,norm,label,lang\nignored,ignored,FOOD,yao\n", encoding="utf-8")
+    entries, markers, errors = lx.load_csv_lexicons(tmp_path)
+    assert [(e["term"], e["lang"], e["case_sensitive"]) for e in entries] == [("ugali", "yao", False), ("ABC", "yao", True)]
+    assert markers == {"yao": {"ni"}}
+    assert len(errors) == 5 and any("label must be" in e for e in errors) and any("lang must be" in e for e in errors)
+    assert lx.load_csv_lexicons(tmp_path / "missing") == ([], {}, [])
+
+
+def test_shipped_lexicon_files_have_no_errors_and_yao_is_empty(client):
+    info = client.get("/v1/nlp/info", headers=ADMIN).json()
+    assert info["lexicon_file_errors"] == []
+    assert {x["code"] for x in info["languages"]} == {"en", "ny", "tum", "yao"}
+    assert client.get("/v1/nlp/lexicon?lang=yao", headers=ADMIN).json()["total"] == 0
+    assert client.get("/v1/nlp/lexicon?lang=tum", headers=ADMIN).json()["total"] == 3
+    assert client.get("/v1/nlp/lexicon?lang=ny&limit=500", headers=ADMIN).json()["total"] > 100

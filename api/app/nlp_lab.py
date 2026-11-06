@@ -37,7 +37,7 @@ class _Matcher:
     def __init__(self, items: list[dict], flags: int, plural: bool):
         self.by_key = {(_key(i["term"]).lower() if flags & re.I else _key(i["term"])): i for i in items}
         ordered = sorted(items, key=lambda i: -len(i["term"]))
-        alt = "|".join(_pattern(i["term"], plural and i["lang"] != "ny") for i in ordered)
+        alt = "|".join(_pattern(i["term"], plural and i["lang"] in ("en", "both")) for i in ordered)
         self.rx = re.compile(r"(?<!\w)(?:" + alt + r")(?!\w)", flags) if alt else None
         self.cs = not flags & re.I
 
@@ -183,7 +183,7 @@ def _ent(start: int, end: int, text: str, label: str, norm: str, group: str, sou
 
 # ---------------------------------------------------------------- language
 _SENT_END = re.compile(r"[.!?;](?=\s|$)|\n")
-_TOKEN = re.compile(r"[A-Za-z']+")
+_TOKEN = re.compile(r"[A-Za-zŵŴ']+")
 
 
 def _sentences(text: str) -> list[tuple[int, int]]:
@@ -197,15 +197,24 @@ def _sentences(text: str) -> list[tuple[int, int]]:
     return out
 
 
-def _lang_of(span_text: str, ny_terms: int) -> str:
+def _lang_scores(span_text: str, hits: Counter) -> Counter:
     toks = [t.lower().strip("'") for t in _TOKEN.findall(span_text.replace("’", "'"))]
-    en = sum(t in lx.EN_WORDS for t in toks)
-    ny = sum(t in lx.NY_WORDS for t in toks) + ny_terms
-    if en == 0 and ny == 0:
+    score = Counter({"en": sum(t in lx.EN_WORDS for t in toks), "ny": sum(t in lx.NY_WORDS for t in toks)})
+    for lang, words in lx.MARKERS.items():
+        score[lang] += sum(t in words for t in toks)
+    for lang, n in hits.items():
+        score[lang] += n
+    return +score                                   # drops zero counts
+
+
+def _lang_of(span_text: str, hits: Counter) -> str:
+    """One of en, ny, tum, yao, mixed (two languages in about equal measure) or unknown."""
+    ranked = _lang_scores(span_text, hits).most_common()
+    if not ranked:
         return "unknown"
-    if en and ny and min(en, ny) / max(en, ny) >= 0.4:
+    if len(ranked) > 1 and ranked[1][1] / ranked[0][1] >= 0.4:
         return "mixed"
-    return "ny" if ny > en else "en"
+    return ranked[0][0]
 
 
 # ---------------------------------------------------------------- context (negation, uncertainty, history, family)
@@ -336,12 +345,14 @@ def analyze(text: str) -> dict:
             n = ents[i + 1]
             if n["label"] == "FOOD" and re.fullmatch(r"\s*(?:of\s+)?", t[e["end"]:n["start"]], re.I):
                 e["food"] = n["norm"]
-    ny_by_sent = Counter()
+    hits_by_sent: dict[int, Counter] = defaultdict(Counter)
     for e in ents:
-        if e.get("lang") == "ny":
-            ny_by_sent[next((k for k, s in enumerate(sents) if s[0] <= e["start"] < s[1]), 0)] += 1
-    sent_langs = [{"start": s[0], "end": s[1], "language": _lang_of(t[s[0]:s[1]], ny_by_sent[k])} for k, s in enumerate(sents)]
-    overall = _lang_of(t, sum(ny_by_sent.values()))
+        if e.get("lang") in ("ny", "tum", "yao"):
+            hits_by_sent[next((k for k, s in enumerate(sents) if s[0] <= e["start"] < s[1]), 0)][e["lang"]] += 1
+    sent_langs = [{"start": s[0], "end": s[1], "language": _lang_of(t[s[0]:s[1]], hits_by_sent[k])} for k, s in enumerate(sents)]
+    total_hits = sum(hits_by_sent.values(), Counter())
+    overall = _lang_of(t, total_hits)
+    detected = [{"language": k, "evidence": n} for k, n in _lang_scores(t, total_hits).most_common()]
     seen = {s["language"] for s in sent_langs} - {"unknown"}
     phi = [e for e in ents if e["label"] == "PHI"]
     rec = _record(ents)
@@ -354,7 +365,7 @@ def analyze(text: str) -> dict:
         warnings.append("Some units were missing and were guessed from the value (flagged `unit_guessed`). Check them.")
     warnings.append("Personal names cannot be detected reliably; only titled names (Mr, Dr, Mayi, Bambo, ...) are flagged.")
     return {"engine": ENGINE_VERSION, "n_chars": len(text), "language": {"overall": overall, "code_switching": len(seen) > 1 or "mixed" in seen,
-                                                                       "sentences": sent_langs},
+                                                                       "detected": detected, "sentences": sent_langs},
             "entities": ents, "record": rec, "classification": _classify(t, ents),
             "identifiers": {"found": len(phi), "types": dict(Counter(e["norm"] for e in phi)), "masked_text": _mask(text, phi) if phi else None},
             "warnings": warnings}

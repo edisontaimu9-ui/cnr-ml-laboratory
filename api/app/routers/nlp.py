@@ -1,5 +1,5 @@
 """NLP laboratory: extract structured nutrition information from free text (clinical notes, reports, research text,
-dietary records) in English and Chichewa.
+dietary records) in English, Chichewa, Tumbuka and Yao.
 
 Safety rules, same spirit as predictions: text is processed in memory and never stored or logged (the audit log keeps counts
 only); identifiers are masked, or the request is refused with `identifiers: reject`; the output describes what the text
@@ -24,8 +24,8 @@ router = APIRouter(prefix="/v1/nlp", tags=["nlp"])
 _limiter = SlidingWindow(get_settings().rate_limit_predict_per_min, 60)
 
 NOTICE = ("Rule-based extraction: it reports what the text says and makes no diagnosis or nutrition-status decision. Terminology lists "
-          "are developer-written and not yet clinically reviewed; terms that are not listed are not found. Chichewa support covers listed "
-          "words only. Text is not stored. Do not submit identifiable patient notes.")
+          "are developer-written and not yet clinically reviewed; terms that are not listed are not found. Chichewa, Tumbuka and Yao support covers listed "
+          "words only (Tumbuka has a tiny seed list, Yao none yet). Text is not stored. Do not submit identifiable patient notes.")
 
 
 class AnalyzeRequest(BaseModel):
@@ -36,11 +36,12 @@ class AnalyzeRequest(BaseModel):
 @router.get("/info", dependencies=[Depends(require("read:nlp"))])
 def info():
     ents = nlp_lexicon.entries()
-    return {"engine": nlp_lab.ENGINE_VERSION, "kind": "rule-based baseline", "labels": nlp_lexicon.LABELS, "languages": ["en", "ny"],
+    return {"engine": nlp_lab.ENGINE_VERSION, "kind": "rule-based baseline", "labels": nlp_lexicon.LABELS,
+            "languages": [{"code": k, **v} for k, v in nlp_lexicon.LANGS.items()], "lexicon_file_errors": nlp_lexicon.LOAD_ERRORS,
             "limits": {"texts_per_request": nlp_lab.MAX_TEXTS, "chars_per_text": nlp_lab.MAX_TEXT_CHARS,
                        "requests_per_minute": get_settings().rate_limit_predict_per_min},
             "lexicon": {"terms": len(ents), "by_label": dict(Counter(e["label"] for e in ents)),
-                        "by_language": dict(Counter(e["lang"] for e in ents)), "clinically_reviewed": 0},
+                        "by_language": dict(Counter(e["lang"] for e in ents)), "terms_for_tum_yao": sum(e["lang"] in ("tum", "yao") for e in ents), "clinically_reviewed": 0},
             "notice": NOTICE}
 
 
@@ -51,7 +52,7 @@ def lexicon(label: str | None = Query(None, max_length=20), lang: str | None = Q
     if label:
         rows = [r for r in rows if r["label"] == label.upper()]
     if lang:
-        rows = [r for r in rows if r["lang"] in (lang, "both")]
+        rows = [r for r in rows if r["lang"] == lang or (r["lang"] == "both" and lang in ("en", "ny"))]
     if q and q.strip():
         needle = q.strip().lower()
         rows = [r for r in rows if needle in r["term"].lower() or needle in r["norm"].lower()]

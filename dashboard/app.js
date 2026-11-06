@@ -105,7 +105,7 @@
         cap("Model evaluation.", "Hold-out and cross-validation, bootstrap ranges, per-class results and leakage guards, to judge how reliable a model is and how well it generalises."),
         cap("Surveillance.", "District hotspots and prevalence trends from aggregated counts, never from individual children."),
         cap("Model management.", "Experiments are recorded and trained models preserved. The registry keeps versions with fixed seeds and hashes for reproducibility, and every deployment passes clinical review."),
-        cap("Text analysis (NLP).", "Structured nutrition information from clinical notes, reports, research text and dietary records in English and Chichewa: foods, conditions, symptoms, interventions and measurements, with negation and identifier masking. Rule-based, not a trained model."),
+        cap("Text analysis (NLP).", "Structured nutrition information from clinical notes, reports, research text and dietary records in English, Chichewa, Tumbuka and Yao: foods, conditions, symptoms, interventions and measurements, with negation and identifier masking. Rule-based, not a trained model."),
         cap("Laboratory memory.", "Decisions, findings, lessons and warnings recorded next to the datasets, experiments and models they are about, kept with their history."),
         cap("CNR integration.", "A pathway for validated models to be served to CNR services and APIs, and an opt-in feed of de-identified data from CNR.")),
       h("h2", null, "Primary objective"),
@@ -1279,7 +1279,7 @@
     ["Dietary record", "24-hour recall: breakfast was 2 cups of porridge with sugar and 1 egg. Lunch: 3 plates of nsima with beans and pumpkin leaves. Supper: nsima with usipa. Drank tea and water. No milk."],
   ];
   const ENT_NAMES = { FOOD: "Food", CONDITION: "Condition", SYMPTOM: "Symptom", INTERVENTION: "Intervention", NUTRIENT: "Nutrient", POPULATION: "Patient group", MEASUREMENT: "Measurement", PHI: "Identifier" };
-  const LANG_NAMES = { en: "English", ny: "Chichewa", mixed: "English + Chichewa", unknown: "Not enough words to tell" };
+  const LANG_NAMES = { en: "English", ny: "Chichewa", tum: "Tumbuka", yao: "Yao", mixed: "More than one language", unknown: "Not enough words to tell" };
   const pct1 = (x) => (x == null ? "—" : (x * 100).toFixed(0) + "%");
 
   function highlight(text, ents) {
@@ -1343,16 +1343,18 @@
       } catch (e) { bench.replaceChildren(h("div", { class: "notice" }, e.message)); } } }, "Run regression benchmark");
     const lq = h("input", { id: "lex-q", type: "search", placeholder: "Search terms", maxlength: "60", autocomplete: "off" });
     const ll = h("select", { id: "lex-l" }, h("option", { value: "" }, "All types"), Object.keys(ENT_NAMES).filter((k) => k !== "MEASUREMENT" && k !== "PHI").map((k) => h("option", { value: k }, ENT_NAMES[k])));
-    const lg = h("select", { id: "lex-g" }, h("option", { value: "" }, "English and Chichewa"), h("option", { value: "en" }, "English"), h("option", { value: "ny" }, "Chichewa"));
+    const lg = h("select", { id: "lex-g" }, h("option", { value: "" }, "All languages"), h("option", { value: "en" }, "English"), h("option", { value: "ny" }, "Chichewa"), h("option", { value: "tum" }, "Tumbuka"), h("option", { value: "yao" }, "Yao"));
     const loadLex = async () => {
       const p = new URLSearchParams({ limit: "500" }); if (lq.value.trim()) p.set("q", lq.value.trim()); if (ll.value) p.set("label", ll.value); if (lg.value) p.set("lang", lg.value);
-      try { const d = await api("/v1/nlp/lexicon?" + p); lexBox.replaceChildren(h("p", { class: "muted" }, d.total + " terms" + (d.total > d.terms.length ? " (first " + d.terms.length + " shown)" : "") + ". None has been clinically reviewed yet."), table(["Term", "Means", "Type", "Group", "Language"], d.terms.map((t) => [t.term, t.norm, ENT_NAMES[t.label], t.group, t.lang === "ny" ? "Chichewa" : t.lang === "en" ? "English" : "Both"]))); }
+      try { const d = await api("/v1/nlp/lexicon?" + p); lexBox.replaceChildren(h("p", { class: "muted" }, d.total + " terms" + (d.total > d.terms.length ? " (first " + d.terms.length + " shown)" : "") + ". None has been clinically reviewed yet."), table(["Term", "Means", "Type", "Group", "Language"], d.terms.map((t) => [t.term, t.norm, ENT_NAMES[t.label], t.group, t.lang === "both" ? "English and Chichewa" : LANG_NAMES[t.lang] || t.lang]))); }
       catch (e) { lexBox.replaceChildren(h("div", { class: "notice" }, e.message)); }
     };
     [ll, lg].forEach((el) => el.addEventListener("change", loadLex)); lq.addEventListener("keydown", (e) => { if (e.key === "Enter") loadLex(); });
     return [h("h1", null, "NLP laboratory"),
-      h("p", null, "Extracts structured nutrition information from clinical notes, reports, research text and dietary records, in English and Chichewa: named entities (foods, conditions, symptoms, interventions, nutrients, patient groups), measurements with units, negation and uncertainty, language, and a document type."),
+      h("p", null, "Extracts structured nutrition information from clinical notes, reports, research text and dietary records, in English, Chichewa, Tumbuka and Yao: named entities (foods, conditions, symptoms, interventions, nutrients, patient groups), measurements with units, negation and uncertainty, language, and a document type."),
       h("div", { class: "notice" }, info.notice),
+      table(["Language", "Support"], info.languages.map((l) => [l.name, l.support])),
+      info.lexicon_file_errors.length ? h("div", { class: "notice" }, "Some rows in the term files were skipped: " + info.lexicon_file_errors.slice(0, 5).join("; ")) : null,
       h("div", { class: "stats" }, h("div", { class: "stat" }, h("b", null, info.lexicon.terms), h("span", null, "terms in the lists")), h("div", { class: "stat" }, h("b", null, info.lexicon.clinically_reviewed), h("span", null, "clinically reviewed")), h("div", { class: "stat" }, h("b", null, info.kind), h("span", null, "engine " + info.engine))),
       can("run:nlp") ? [h("h2", null, "Analyse text"), samples, h("label", { for: "nlp-text" }, "Text"), area, h("label", { for: "nlp-mode" }, "If identifiers are found"), mode, h("p", null, run), err, result]
         : h("div", { class: "notice" }, "Your role can read the terminology and benchmark but cannot analyse text."),
