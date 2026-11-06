@@ -71,13 +71,14 @@ A hotspot analysis answers "where is prevalence higher than expected, and how is
 - **Out of scope.** No bulk transfer of CNR records into the lab and no calls from the lab into CNR's data endpoints; that would need a separate de-identification and approval design. Treat these as open decisions with the data owner.
 - **Known limits.** The rate limit is per process (single instance). There is no per-caller allow-list of IP addresses; the service key is the only credential, so keep it in CNR's secret store and rotate it by revoking and re-creating it under Access.
 
-## LLM intelligence (phases 1 and 2: safety rules, Ask CNR)
+## LLM intelligence (phases 1 to 3: safety rules, Ask CNR, RAG evaluation)
 The laboratory is adding language-model features in six approved phases (see [LLM_INTELLIGENCE.md](LLM_INTELLIGENCE.md)). Phase 1 fixed the rules every feature must pass through; phase 2 adds `ask` and `retrieve`, which relay questions to Chakudya's RAG routes. No language model is added by the laboratory.
 - **One gate.** `routers/llm.gate` (authentication, `use:llm`, per-key rate limit) and `llm_policy` (decision-support boundary, identifier gate) are reused by every LLM endpoint. `POST /v1/llm/precheck` runs exactly that gate.
 - **One door to Chakudya.** `llm_gateway.py` is the only module that reads the consumer key, and the only LLM module that reads the CNR admin key (opt-in, same host only). The address and key come from the environment; redirects are refused; only `/rag/ask` and `/rag/retrieve` are allowed. A test fails if any other module reads the key or the dashboard mentions it.
 - **Identifiers.** The NLP detector decides what may leave. It is incomplete by nature (no untitled names, addresses or dates of birth), so the contract states that and de-identification at the source stays mandatory.
 - **Audit.** `llm_audit.py` is an allow-list of counts and fixed codes; free text cannot be stored by mistake.
 - **Ask CNR (phase 2).** `routers/llm.ask` and `.retrieve` run gate, decision-support screen, identifier gate (question and history), then `llm_gateway`. `llm_rag.py` shapes the reply: output screen, citation check, intent list, size caps. No session id is forwarded, nothing is stored and the audit holds counts and codes only.
+- **RAG evaluation (phase 3).** `llm_eval.py` is pure logic (gold-question validation, per-question evaluation through the same gate and gateway, metrics, Wilson intervals, readiness); `routers/llm_eval.py` persists and serves it. Tables `mlab_llm_eval_sets`, `_questions` (immutable), `_runs` (config and set fingerprint), `_results` (metrics and the screened answer) and `_ratings`. Runs execute in a background task with their own session, count every upstream call against the starting key's rate limit, and save results one question at a time. Audit stays counts and codes only (`llm_audit` allow-list).
 - **Not covered yet.** No evaluation (phase 3), no summarisation (4), no model comparison (5) and no fine-tuning (6). Answer quality is unmeasured.
 
 ## Dataset ingestion

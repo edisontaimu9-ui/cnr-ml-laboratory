@@ -234,7 +234,7 @@ It exists to turn nutrition data into usable intelligence for Malawi: research, 
 - **Report:** documents and entities per language and label, with warnings when a language has under 100 documents or a label under 50 examples.
 - Needs the `write:datasets` permission to upload and `read:datasets` to list. Reading `.spacy` files needs spaCy, which is in `requirements.txt`.
 
-## LLM intelligence (phases 1 and 2 of 6: safety rules, then Ask CNR)
+## LLM intelligence (phases 1 to 3 of 6: safety rules, Ask CNR, RAG evaluation)
 - **Roadmap:** six sequential phases (Ask CNR, RAG evaluation, clinical summarisation, open-weight model comparison, gated fine-tuning), each approved before the next begins. See [docs/LLM_INTELLIGENCE.md](docs/LLM_INTELLIGENCE.md). Phase 1 fixed the safety rules; **phase 2 (Ask CNR)** relays questions to Chakudya's RAG routes. No new language model is introduced and nothing is stored.
 - **Never diagnoses.** Questions that ask for a diagnosis, or a prescription or dose for a patient, are refused; answers that state a diagnosis or prescription about a person are blocked. Criteria, guideline text and documented findings stay allowed. English patterns only so far.
 - **Nothing identifiable leaves the lab.** Text passes the NLP identifier detector first and is refused (default) or masked. The detector misses untitled names, addresses and dates of birth, so de-identification at the source is still required.
@@ -242,6 +242,7 @@ It exists to turn nutrition data into usable intelligence for Malawi: research, 
 - **Audit logs hold counts and fixed codes only**, never text. **Limits are per API key** (default 20 per minute, 300 per hour).
 - **Ask CNR (phase 2).** `POST /v1/llm/ask` returns a cited answer (with detected intent and Clinical / General / Both scope) and `POST /v1/llm/retrieve` returns source passages only; both pass the same gate, no session is forwarded, answers are screened again before they are returned and citation markers are checked against the listed sources. The dashboard has an **Ask CNR** chat page. Quality has not been evaluated yet (phase 3). Off until `LLM_ENABLED=true`.
 - **Endpoints:** `GET /v1/llm/contract`, `GET /v1/llm/status` (admin), `POST /v1/llm/precheck`, `POST /v1/llm/ask`, `POST /v1/llm/retrieve` (data scientist, clinical reviewer, admin). New permissions: `read:llm` (everyone but `service`) and `use:llm`.
+- **RAG evaluation (phase 3).** Dietitians write gold-standard question sets (expected sources and facts, or should-refuse); a run records retrieval hit rate, citation validity, groundedness, refusals and latency with 95% intervals; reviewers rate answers; every summary states whether there is enough evidence for any quality claim (`readiness`). Endpoints under `/v1/llm/eval`; dashboard page **RAG evaluation**. No quality claim and no fine-tuning before these results exist. See [docs/LLM_INTELLIGENCE.md](docs/LLM_INTELLIGENCE.md).
 
 ## Roles
 | Role | Can |

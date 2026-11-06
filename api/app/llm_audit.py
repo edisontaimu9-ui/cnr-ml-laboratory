@@ -22,6 +22,9 @@ ALLOWED = {
     # phase 2 (ask / retrieve): counts and fixed codes about the exchange, never its text
     "context": "code", "intent": "code", "cache": "code", "top_k": "int", "history_turns": "int", "sources": "int", "cited": "int",
     "invalid_citations": "int", "latency_ms": "int", "output_blocked": "bool", "http_status": "int",
+    # phase 3 (evaluation): counts and fixed codes about sets, runs and ratings, never question, answer or comment text
+    "questions": "int", "completed": "int", "errors": "int", "split": "code", "expected_sources": "int", "expected_facts": "int",
+    "should_refuse": "bool", "accuracy": "int", "supported": "bool", "safe": "bool", "comment_chars": "int", "name_chars": "int",
 }
 
 
@@ -46,5 +49,5 @@ def clean(fields: dict) -> dict:
     return out
 
 
-def record(db: Session, action: str, *, principal=None, request: Request | None = None, **fields) -> None:
-    audit.record(db, action, principal=principal, request=request, resource_type="llm", detail=clean(fields))
+def record(db: Session, action: str, *, principal=None, request: Request | None = None, resource_id=None, **fields) -> None:
+    audit.record(db, action, principal=principal, request=request, resource_type="llm", resource_id=resource_id, detail=clean(fields))

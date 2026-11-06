@@ -272,3 +272,73 @@ class NlpModelVersion(Base):
     retired_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     retired_reason: Mapped[str | None] = mapped_column(String(300), nullable=True)
     history_json: Mapped[list] = mapped_column(JSON, default=list)
+
+
+# ---------------------------------------------------------------- LLM phase 3: RAG evaluation laboratory
+class LlmEvalSet(Base):
+    """A named gold-standard question set written by dietitians. Questions are knowledge questions, never patient text."""
+    __tablename__ = "mlab_llm_eval_sets"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(160), unique=True)
+    description: Mapped[str] = mapped_column(Text, default="")
+    created_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class LlmEvalQuestion(Base):
+    """One gold question. Immutable: to change it, archive it and add a new one, so results always match what was asked."""
+    __tablename__ = "mlab_llm_eval_questions"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    set_id: Mapped[int] = mapped_column(ForeignKey("mlab_llm_eval_sets.id"), index=True)
+    question: Mapped[str] = mapped_column(Text)
+    context: Mapped[str] = mapped_column(String(16), default="both")
+    expected_sources_json: Mapped[list] = mapped_column(JSON, default=list)   # source or title fragments that should be retrieved and cited
+    expected_facts_json: Mapped[list] = mapped_column(JSON, default=list)     # short facts that a correct answer states
+    should_refuse: Mapped[bool] = mapped_column(Boolean, default=False)       # the laboratory must refuse or withhold (decision-support boundary)
+    split: Mapped[str] = mapped_column(String(8), default="dev")              # dev | heldout (heldout is reserved for the fine-tuning gate)
+    created_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class LlmEvalRun(Base):
+    __tablename__ = "mlab_llm_eval_runs"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    set_id: Mapped[int] = mapped_column(ForeignKey("mlab_llm_eval_sets.id"), index=True)
+    set_sha256: Mapped[str] = mapped_column(String(64))
+    config_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    status: Mapped[str] = mapped_column(String(16), default="queued")        # queued | running | completed | stopped | failed
+    stop_reason: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    question_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    created_by_key_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class LlmEvalResult(Base):
+    __tablename__ = "mlab_llm_eval_results"
+    __table_args__ = (UniqueConstraint("run_id", "question_id"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("mlab_llm_eval_runs.id"), index=True)
+    question_id: Mapped[int] = mapped_column(ForeignKey("mlab_llm_eval_questions.id"))
+    metrics_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    answer_text: Mapped[str] = mapped_column(Text, default="")                # screened answer, identifiers masked; kept so reviewers can rate it
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class LlmEvalRating(Base):
+    """One reviewer's judgement of one result. One row per reviewer key and result; a second submission replaces the first."""
+    __tablename__ = "mlab_llm_eval_ratings"
+    __table_args__ = (UniqueConstraint("result_id", "reviewer_key_id"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    result_id: Mapped[int] = mapped_column(ForeignKey("mlab_llm_eval_results.id"), index=True)
+    reviewer_key_id: Mapped[int] = mapped_column(Integer)
+    reviewer_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    accuracy: Mapped[int] = mapped_column(Integer)          # 1 (wrong) .. 5 (fully correct)
+    supported: Mapped[bool] = mapped_column(Boolean)        # every claim is backed by the cited sources
+    safe: Mapped[bool] = mapped_column(Boolean)             # no diagnosis, prescription or harmful advice
+    comment: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

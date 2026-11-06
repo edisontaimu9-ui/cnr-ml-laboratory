@@ -16,14 +16,14 @@ from .models import ApiKey, utcnow
 _VIEW = {"read:catalog", "read:models", "read:experiments", "read:datasets", "read:explorations", "read:hotspots", "read:notes", "read:nlp", "read:llm"}
 ROLE_PERMISSIONS: dict[str, set[str]] = {
     "viewer": _VIEW,
-    "data_scientist": _VIEW | {"write:datasets", "write:experiments", "write:explorations", "write:hotspots", "read:dataset_rows", "write:models", "predict:models", "write:notes", "run:nlp", "use:llm"},
-    "clinical_reviewer": _VIEW | {"approve:models", "read:audit", "predict:models", "write:notes", "run:nlp", "use:llm"},
+    "data_scientist": _VIEW | {"write:datasets", "write:experiments", "write:explorations", "write:hotspots", "read:dataset_rows", "write:models", "predict:models", "write:notes", "run:nlp", "use:llm", "write:llm_gold"},
+    "clinical_reviewer": _VIEW | {"approve:models", "read:audit", "predict:models", "write:notes", "run:nlp", "use:llm", "write:llm_gold", "rate:llm"},
     # Food registry data owner: may review food-name matchers only (enforced in the registry router), nothing else.
     "registry_owner": _VIEW | {"approve:matchers"},
     # Machine key for the CNR integration: can list the catalogue and call predictions, nothing else.
     "service": {"read:catalog", "read:models", "predict:models"},
     "admin": _VIEW | {"write:datasets", "write:experiments", "write:explorations", "write:hotspots", "read:dataset_rows", "write:models", "approve:models",
-                      "read:audit", "manage:keys", "deploy:models", "predict:models", "read:integration", "manage:sync", "write:notes", "run:nlp", "use:llm"},
+                      "read:audit", "manage:keys", "deploy:models", "predict:models", "read:integration", "manage:sync", "write:notes", "run:nlp", "use:llm", "write:llm_gold", "rate:llm"},
 }
 
 

@@ -73,6 +73,7 @@
     { id: "nlp", label: "NLP", perm: "read:nlp", render: nlpPage },
     { id: "corpora", label: "NLP corpora", perm: "read:datasets", render: corporaPage },
     { id: "ask", label: "Ask CNR", perm: "use:llm", render: askPage },
+    { id: "eval", label: "RAG evaluation", perm: "read:llm", render: evalPage },
     { id: "predict", label: "Predict", perm: "predict:models", render: predictPage },
     { id: "registry", label: "Registry", perm: "read:models", render: registry },
     { id: "datasets", label: "Datasets", perm: "read:datasets", render: datasets },
@@ -1778,6 +1779,199 @@
       h("div", { class: "ask-actions" }, send, clear, h("span", { class: "muted" }, "Ctrl+Enter to send · " + c.limits.per_minute_per_key + " per minute")),
       h("p", { class: "muted" }, "This conversation is kept in this page only. It is not saved in your browser, and the laboratory stores no questions or answers. Follow-up questions send your last few turns to Chakudya so it can resolve what \"it\" refers to."),
     ];
+  }
+
+  // ---- RAG evaluation laboratory (LLM phase 3). Routes: eval (question sets), eval/set-<id>, eval/runs, eval/run-<id>, eval/result-<id>.
+  // Gold questions are knowledge questions written by dietitians, never patient text. Nothing is kept in the browser: every value comes from
+  // the server, and all text is inserted as text, never as HTML.
+  const EVAL_OUTCOME = { answered: ["Answered", ""], withheld: ["Withheld", "watch"], refused_policy: ["Refused", "watch"], refused_identifiers: ["Refused (identifiers)", "watch"], error: ["Error", "bad"] };
+  const evalRate = (r) => (!r || r.rate == null ? "—" : pct1(r.rate) + " (" + r.k + "/" + r.n + (r.ci95 ? ", 95% CI " + pct1(r.ci95[0]) + "–" + pct1(r.ci95[1]) : "") + ")");
+  const evalTick = (v) => (v == null ? "—" : v ? "yes" : "no");
+  const evalMs = (l) => (l && l.median_ms != null ? "median " + l.median_ms + " ms, p95 " + l.p95_ms + " ms (" + l.n + " calls)" : "—");
+  const evalLines = (t) => t.split("\n").map((x) => x.trim()).filter(Boolean);
+  const evalOutcomeBadge = (o) => { const [l, c] = EVAL_OUTCOME[o] || [o || "—", "planned"]; return h("span", { class: "badge " + c }, l); };
+
+  function evalTabs(active) {
+    return h("div", { class: "tabs", role: "navigation", "aria-label": "Evaluation sections" }, [["sets", "Question sets"], ["runs", "Runs"]].map(([id, label]) =>
+      h("button", { "aria-current": id === active ? "page" : false, onclick: () => { location.hash = id === "sets" ? "eval" : "eval/" + id; } }, label)));
+  }
+
+  async function evalPage(arg) {
+    const a = arg || "";
+    let tab = "sets", body;
+    if (a === "runs") { tab = "runs"; body = await evalRuns(); }
+    else if (/^run-\d+$/.test(a)) { tab = "runs"; body = await evalRunDetail(Number(a.slice(4))); }
+    else if (/^result-\d+$/.test(a)) { tab = "runs"; body = await evalResultDetail(Number(a.slice(7))); }
+    else if (/^set-\d+$/.test(a)) body = await evalSetDetail(Number(a.slice(4)));
+    else body = await evalSets();
+    return [h("h1", null, "RAG evaluation laboratory"), evalTabs(tab), [].concat(body).flat(Infinity)];
+  }
+
+  async function evalSets() {
+    const [rows, m] = await Promise.all([api("/v1/llm/eval/sets"), api("/v1/llm/eval/method")]);
+    const out = [h("p", null, "Measure how well Ask CNR retrieves and cites its sources, and whether it refuses what it should. Build a gold-standard question set, run it, then have reviewers rate the answers."),
+      h("div", { class: "notice" }, m.notice)];
+    out.push(rows.length ? table(["Set", "Questions", "Answerable", "Should refuse", "Held-out", "Runs", "Created by", ""], rows.map((s) =>
+      [s.name, s.questions, s.answerable, s.should_refuse, s.heldout, s.runs, s.created_by || "—", h("button", { class: "link", onclick: () => { location.hash = "eval/set-" + s.id; } }, "Open")]))
+      : empty("No question sets yet", can("write:llm_gold") ? "Create a set below, then add questions with the sources and facts a correct answer must have." : "A dietitian or data scientist can create a set."));
+    if (can("write:llm_gold")) {
+      const name = h("input", { id: "ev-name", maxlength: "160" }), desc = h("input", { id: "ev-desc", maxlength: "1000" }), err = h("p", { class: "error", role: "alert" });
+      out.push(h("h2", null, "New question set"), h("label", { for: "ev-name" }, "Name"), name, h("label", { for: "ev-desc" }, "Description (optional)"), desc, err,
+        h("button", { class: "primary", onclick: async () => {
+          err.textContent = "";
+          if (!name.value.trim()) { err.textContent = "Give the set a name."; return; }
+          try { const s = await api("/v1/llm/eval/sets", { method: "POST", body: JSON.stringify({ name: name.value.trim(), description: desc.value.trim() }) }); location.hash = "eval/set-" + s.id; }
+          catch (e) { err.textContent = e.message; }
+        } }, "Create set"));
+    }
+    out.push(h("details", null, h("summary", null, "How results are measured, and what they cannot show"),
+      h("ul", null, Object.entries(m.metrics).map(([k, v]) => h("li", null, h("b", null, k.replace(/_/g, " ") + ": "), v))),
+      h("ul", { class: "plain warn" }, m.limits.map((l) => h("li", null, l)))));
+    return out;
+  }
+
+  function evalParseLines(text) {
+    // one question per line: question | source one; source two | fact one; fact two      (or: question | refuse)
+    return evalLines(text).map((line) => {
+      const [q, second = "", third = ""] = line.split("|").map((x) => x.trim());
+      const split = (x) => x.split(";").map((y) => y.trim()).filter(Boolean);
+      return second.toLowerCase() === "refuse" ? { question: q, should_refuse: true } : { question: q, expected_sources: split(second), expected_facts: split(third) };
+    });
+  }
+
+  async function evalSetDetail(id) {
+    const [s, runs] = await Promise.all([api("/v1/llm/eval/sets/" + id), api("/v1/llm/eval/runs?set_id=" + id)]);
+    const reload = () => show("eval/set-" + id);
+    const active = s.questions.filter((q) => !q.archived);
+    const out = [backLink("eval", "All question sets"), h("h2", null, s.name), s.description ? h("p", null, s.description) : null,
+      h("p", { class: "muted" }, active.length + " active question" + (active.length === 1 ? "" : "s") + " · fingerprint " + s.sha256.slice(0, 12) + " · created by " + (s.created_by || "—") + " · up to " + s.limits.max_questions + " questions"),
+      s.questions.length ? table(["Question", "Scope", "Split", "Expected sources", "Expected facts", ""], s.questions.map((q) => [
+        h("span", { class: q.archived ? "neg" : "" }, q.question), q.context, q.split,
+        q.should_refuse ? h("span", { class: "badge watch" }, "should refuse") : q.expected_sources.join("; ") || "—", q.should_refuse ? "—" : q.expected_facts.join("; ") || "—",
+        q.archived ? "archived" : can("write:llm_gold") ? h("button", { class: "link", onclick: async () => { try { await api("/v1/llm/eval/questions/" + q.id + "/archive", { method: "POST" }); reload(); } catch (e) { alert(e.message); } } }, "Archive") : ""]))
+        : empty("No questions yet", "Add questions below.")];
+    if (can("write:llm_gold")) {
+      const q = h("textarea", { id: "ev-q", rows: "2", maxlength: "1000", placeholder: "A knowledge question, for example: What is the MUAC cut-off for severe acute malnutrition? No names or contact details." });
+      const ctx = h("select", { id: "ev-ctx" }, [["both", "Both"], ["clinical", "Clinical"], ["general", "General"]].map(([v, l]) => h("option", { value: v }, l)));
+      const split = h("select", { id: "ev-split" }, h("option", { value: "dev" }, "Development"), h("option", { value: "heldout" }, "Held-out (kept for the final check)"));
+      const src = h("textarea", { id: "ev-src", rows: "2", placeholder: "One per line: part of the source or title that should be retrieved and cited, for example: Malawi Guidelines" });
+      const facts = h("textarea", { id: "ev-facts", rows: "2", placeholder: "One per line: a short fact a correct answer states, for example: 115 mm" });
+      const refuse = h("input", { id: "ev-refuse", type: "checkbox" });
+      const err = h("p", { class: "error", role: "alert" });
+      out.push(h("h2", null, "Add a question"), h("label", { for: "ev-q" }, "Question"), q,
+        h("div", { class: "ask-controls" }, h("div", null, h("label", { for: "ev-ctx" }, "Knowledge scope"), ctx), h("div", null, h("label", { for: "ev-split" }, "Split"), split)),
+        h("label", { class: "chk" }, refuse, " The laboratory should refuse this (for example, it asks for a diagnosis or a dose for a patient)"),
+        h("label", { for: "ev-src" }, "Expected sources"), src, h("label", { for: "ev-facts" }, "Expected facts"), facts, err,
+        h("button", { class: "primary", onclick: async () => {
+          err.textContent = "";
+          const body = { question: q.value.trim(), context: ctx.value, split: split.value, should_refuse: refuse.checked, expected_sources: refuse.checked ? [] : evalLines(src.value), expected_facts: refuse.checked ? [] : evalLines(facts.value) };
+          if (!body.question) { err.textContent = "Type the question first."; return; }
+          try { await api("/v1/llm/eval/sets/" + id + "/questions", { method: "POST", body: JSON.stringify({ questions: [body] }) }); reload(); }
+          catch (e) { err.textContent = e.message; }
+        } }, "Add question"));
+      const bulk = h("textarea", { id: "ev-bulk", rows: "5", placeholder: "question | source one; source two | fact one; fact two\nWhat is the MUAC cut-off for SAM? | Malawi Guidelines | 115 mm\nDoes this child have kwashiorkor? | refuse" });
+      const berr = h("p", { class: "error", role: "alert" });
+      out.push(h("details", null, h("summary", null, "Add several questions at once"),
+        h("p", { class: "muted" }, "One question per line: question | expected sources | expected facts, separated by semicolons. A line ending in | refuse is a question the laboratory should refuse. Up to 50 lines; if any line is not accepted, none are added."), bulk, berr,
+        h("button", { onclick: async () => {
+          berr.textContent = "";
+          const qs = evalParseLines(bulk.value);
+          if (!qs.length) { berr.textContent = "Paste at least one line."; return; }
+          try { await api("/v1/llm/eval/sets/" + id + "/questions", { method: "POST", body: JSON.stringify({ questions: qs }) }); reload(); }
+          catch (e) { berr.textContent = e.message; }
+        } }, "Add these questions")));
+    }
+    if (can("use:llm") && active.length) {
+      const split = h("select", { id: "ev-run-split" }, h("option", { value: "dev" }, "Development questions"), h("option", { value: "heldout" }, "Held-out questions"), h("option", { value: "all" }, "All questions"));
+      const topk = h("select", { id: "ev-topk" }, [3, 5, 8, 10].map((n) => h("option", { value: String(n), selected: n === 5 }, "Top " + n + " sources")));
+      const err = h("p", { class: "error", role: "alert" });
+      out.push(h("h2", null, "Run an evaluation"),
+        h("div", { class: "notice" }, "Each question is checked like a live question, then sent to Chakudya twice (sources, then answer). Every call counts toward your rate limit, so a large set takes several minutes. Held-out questions are for the final check only; do not tune against them."),
+        h("div", { class: "ask-controls" }, h("div", null, h("label", { for: "ev-run-split" }, "Questions"), split), h("div", null, h("label", { for: "ev-topk" }, "Retrieval depth"), topk)), err,
+        h("button", { class: "primary", onclick: async () => {
+          err.textContent = "";
+          try { const r = await api("/v1/llm/eval/sets/" + id + "/runs", { method: "POST", body: JSON.stringify({ split: split.value, top_k: Number(topk.value) }) }); location.hash = "eval/run-" + r.id; }
+          catch (e) { err.textContent = e.message; }
+        } }, "Start run"));
+    }
+    out.push(h("h2", null, "Runs of this set"), evalRunTable(runs));
+    return out;
+  }
+
+  function evalRunTable(rows) {
+    if (!rows.length) return empty("No runs yet", "Start a run from a question set.");
+    return table(["Run", "Set", "Status", "Questions", "Config", "Started by", "Started", ""], rows.map((r) => ["#" + r.id, r.set_name || "—",
+      h("span", { class: "badge " + (r.status === "completed" ? "" : r.status === "failed" ? "bad" : "watch") }, r.status + (r.stop_reason ? " · " + r.stop_reason.replace(/_/g, " ") : "")),
+      r.completed + " / " + r.question_count, (r.config.split || "—") + ", top " + (r.config.top_k || "—"), r.created_by || "—", fmt(r.created_at),
+      h("button", { class: "link", onclick: () => { location.hash = "eval/run-" + r.id; } }, "Open")]));
+  }
+
+  async function evalRuns() { return [h("p", null, "Every run is kept with its configuration and the fingerprint of the questions it used, so two runs are comparable only when the fingerprints match."), evalRunTable(await api("/v1/llm/eval/runs"))]; }
+
+  async function evalRunDetail(id) {
+    const r = await api("/v1/llm/eval/runs/" + id), s = r.summary, g = s.groundedness, rv = s.reviewer, ready = s.readiness;
+    if (r.status === "queued" || r.status === "running") poll = setTimeout(() => { if (location.hash.slice(1) === "eval/run-" + id) show("eval/run-" + id, true); }, 3000);
+    const out = [backLink("eval/runs", "All runs"), h("h2", null, "Run #" + r.id + " · " + (r.set_name || "")),
+      h("p", null, h("span", { class: "badge " + (r.status === "completed" ? "" : r.status === "failed" ? "bad" : "watch") }, r.status + (r.stop_reason ? " · " + r.stop_reason.replace(/_/g, " ") : "")), " ",
+        r.completed + " of " + r.question_count + " questions · " + r.config.split + " · top " + r.config.top_k + " · fingerprint " + r.set_sha256.slice(0, 12) + " · started by " + (r.created_by || "—") + " · " + fmt(r.created_at))];
+    if ((r.status === "queued" || r.status === "running") && can("use:llm"))
+      out.push(h("button", { onclick: async () => { try { await api("/v1/llm/eval/runs/" + id + "/stop", { method: "POST" }); show("eval/run-" + id); } catch (e) { alert(e.message); } } }, "Stop run"));
+    out.push(ready.sufficient_for_quality_claims
+      ? h("div", { class: "notice ok" }, "These results meet the minimum evidence thresholds. " + ready.note)
+      : h("div", { class: "notice" }, h("b", null, "Not enough evidence for any quality claim. "), h("ul", { class: "plain" }, ready.reasons.map((x) => h("li", null, x)))));
+    out.push(h("div", { class: "stats" }, nlpStat("Retrieval hit rate", pct1(s.retrieval.hit_rate.rate)), nlpStat("Cited an expected source", pct1(s.citations.cited_source_hit_rate.rate)),
+      nlpStat("Answers grounded", pct1(g.grounded_rate.rate)), nlpStat("Refusals as expected", pct1(s.refusals.recall.rate))));
+    out.push(table(["Measure", "Result"], [
+      ["Retrieval hit rate", evalRate(s.retrieval.hit_rate)], ["Mean reciprocal rank", s.retrieval.mean_reciprocal_rank == null ? "—" : s.retrieval.mean_reciprocal_rank],
+      ["Answer cites an expected source", evalRate(s.citations.cited_source_hit_rate)],
+      ["Citation validity", s.citations.validity.mean == null ? "—" : pct1(s.citations.validity.mean) + " of markers valid; " + s.citations.validity.answers_with_invalid_marker + " of " + s.citations.validity.answers_with_markers + " answers had an invalid marker"],
+      ["Answers that cite a listed source", evalRate(g.grounded_rate)], ["Numbers supported by retrieved text", evalRate(g.numeric_support_rate)],
+      ["Expected facts found", g.fact_coverage.mean == null ? "—" : pct1(g.fact_coverage.mean) + " over " + g.fact_coverage.questions + " questions"],
+      ["Should-refuse questions refused or withheld", evalRate(s.refusals.recall)], ["Answerable questions refused (over-refusal)", evalRate(s.refusals.over_refusal_rate)],
+      ["Errors", s.errors], ["Latency: answer", evalMs(s.latency.ask)], ["Latency: sources", evalMs(s.latency.retrieve)]]));
+    out.push(h("h2", null, "Reviewer ratings"), h("p", null, rv.results_rated + " of " + rv.results_total + " results rated (" + pct1(rv.coverage) + ") by " + rv.reviewers + " reviewer" + (rv.reviewers === 1 ? "" : "s") +
+      (rv.mean_accuracy != null ? " · mean accuracy " + rv.mean_accuracy + " of 5 · supported " + evalRate(rv.supported) + " · safe " + evalRate(rv.safe) : "")));
+    out.push(h("h2", null, "Results"), r.results.length ? table(["Question", "Outcome", "Source retrieved", "Source cited", "Cites a source", "Unsupported numbers", "Facts", "Answer ms", "Ratings", ""], r.results.map((x) => [
+      (x.should_refuse ? "[should refuse] " : "") + (x.question.length > 90 ? x.question.slice(0, 90) + "…" : x.question), evalOutcomeBadge(x.outcome), evalTick(x.retrieval_hit), evalTick(x.cited_source_hit),
+      evalTick(x.grounded), x.numbers_unsupported == null ? "—" : x.numbers_unsupported, x.facts_total ? x.facts_found + "/" + x.facts_total : "—", x.latency_ask_ms == null ? "—" : x.latency_ask_ms, x.ratings,
+      h("button", { class: "link", onclick: () => { location.hash = "eval/result-" + x.result_id; } }, "Open")])) : empty("No results yet", "Results appear here as each question finishes."));
+    return out;
+  }
+
+  async function evalResultDetail(id) {
+    const x = await api("/v1/llm/eval/results/" + id), q = x.question, m = x.metrics;
+    const out = [backLink("eval/run-" + x.run_id, "Back to run #" + x.run_id), h("h2", null, "Result"), h("p", null, h("b", null, q.question)),
+      h("p", { class: "muted" }, "Scope " + q.context + " · " + q.split + (q.should_refuse ? " · the laboratory should refuse this" : "")),
+      q.expected_sources.length ? h("p", null, h("b", null, "Expected sources: "), q.expected_sources.join("; ")) : null, q.expected_facts.length ? h("p", null, h("b", null, "Expected facts: "), q.expected_facts.join("; ")) : null,
+      h("p", null, evalOutcomeBadge(m.outcome), " ", m.refusal_category ? h("span", { class: "muted" }, "reason: " + m.refusal_category.replace(/_/g, " ")) : null),
+      x.answer ? h("div", { class: "msg bot" }, h("div", { class: "answer" }, x.answer)) : h("p", { class: "muted" }, "No answer was returned for this question.")];
+    if (m.retrieved) out.push(h("h3", null, "Sources retrieved"), table(["Rank", "Source", "Title", "Score"], m.retrieved.map((c) => [c.rank, c.source || "—", c.title || "—", c.score == null ? "—" : c.score])));
+    const checks = [["Expected source retrieved", evalTick(m.retrieval_hit) + (m.first_hit_rank ? " (rank " + m.first_hit_rank + ")" : "")], ["Expected source cited", evalTick(m.cited_source_hit)],
+      ["Citation markers", m.markers_valid == null ? "—" : m.markers_valid + " valid, " + m.markers_invalid + " invalid"], ["Cites a listed source", evalTick(m.grounded)],
+      ["Numbers not in retrieved text", m.numbers_total == null ? "—" : m.numbers_unsupported + " of " + m.numbers_total + ((m.unsupported_numbers || []).length ? " (" + m.unsupported_numbers.join(", ") + ")" : "")],
+      ["Expected facts found", m.facts_total ? m.facts_found + " of " + m.facts_total + ((m.missing_facts || []).length ? " · missing: " + m.missing_facts.join("; ") : "") : "—"],
+      ["Latency", (m.latency_retrieve_ms != null ? "sources " + m.latency_retrieve_ms + " ms" : "") + (m.latency_ask_ms != null ? " · answer " + m.latency_ask_ms + " ms" : "") || "—"]];
+    out.push(h("h3", null, "Automatic checks"), table(["Check", "Result"], checks), h("p", { class: "muted" }, x.answer_note));
+    out.push(h("h3", null, "Reviewer ratings"));
+    out.push(x.ratings.length ? table(["Reviewer", "Accuracy", "Supported", "Safe", "Comment", "Updated"], x.ratings.map((g) => [g.reviewer + (g.mine ? " (you)" : ""), g.accuracy + " / 5", evalTick(g.supported), evalTick(g.safe), g.comment || "—", fmt(g.updated_at)])) : empty("Not rated yet", ""));
+    if (can("rate:llm") && m.outcome !== "error") {
+      const mine = x.ratings.find((g) => g.mine) || { accuracy: 3, supported: false, safe: true, comment: "" };
+      const acc = h("select", { id: "rt-acc" }, [1, 2, 3, 4, 5].map((n) => h("option", { value: String(n), selected: n === mine.accuracy }, n + " of 5")));
+      const sup = h("input", { id: "rt-sup", type: "checkbox", checked: mine.supported }), safe = h("input", { id: "rt-safe", type: "checkbox", checked: mine.safe });
+      const com = h("textarea", { id: "rt-com", rows: "2", maxlength: "600", placeholder: "Optional. No names or contact details." });
+      com.value = mine.comment || "";
+      const err = h("p", { class: "error", role: "alert" });
+      out.push(h("h3", null, x.ratings.some((g) => g.mine) ? "Change your rating" : "Rate this answer"), h("p", { class: "muted" }, x.rating_scale.accuracy),
+        h("label", { for: "rt-acc" }, "Accuracy"), acc,
+        h("label", { class: "chk" }, sup, " " + x.rating_scale.supported), h("label", { class: "chk" }, safe, " " + x.rating_scale.safe),
+        h("label", { for: "rt-com" }, "Comment"), com, err,
+        h("button", { class: "primary", onclick: async () => {
+          err.textContent = "";
+          try { await api("/v1/llm/eval/results/" + id + "/rating", { method: "POST", body: JSON.stringify({ accuracy: Number(acc.value), supported: sup.checked, safe: safe.checked, comment: com.value.trim() }) }); show("eval/result-" + id); }
+          catch (e) { err.textContent = e.message; }
+        } }, "Save rating"));
+    }
+    return out;
   }
 
   async function nlpPage() {

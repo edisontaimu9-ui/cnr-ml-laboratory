@@ -147,3 +147,5 @@ ul.warn{color:#7a5b00}
 .chunk{border-top:1px solid var(--line);padding-top:.5rem;margin-top:.5rem}
 .snippet{white-space:pre-wrap;margin:.2rem 0}
 .ask-actions{display:flex;gap:.6rem;align-items:center;flex-wrap:wrap;margin:.4rem 0}
+.notice.ok{border-left-color:var(--lake);background:var(--lake-soft)}
+.chk{font-weight:400;display:flex;gap:.4rem;align-items:flex-start;margin:.3rem 0}

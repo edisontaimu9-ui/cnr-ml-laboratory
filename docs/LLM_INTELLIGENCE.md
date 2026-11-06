@@ -5,8 +5,8 @@ Six sequential phases. Each is implemented, tested, documented, pushed and **app
 | Phase | Scope | Status |
 |---|---|---|
 | 1 | Contract and safety rules | Approved |
-| 2 | Ask CNR: RAG and natural-language interaction (`/v1/llm/ask`, `/v1/llm/retrieve`, chat page) | Implemented, awaiting approval |
-| 3 | RAG evaluation laboratory (gold-standard questions, hit rate, citation validity, groundedness, refusals, latency, reviewer ratings) | Not started |
+| 2 | Ask CNR: RAG and natural-language interaction (`/v1/llm/ask`, `/v1/llm/retrieve`, chat page) | Approved |
+| 3 | RAG evaluation laboratory (gold-standard questions, hit rate, citation validity, groundedness, refusals, latency, reviewer ratings) | Implemented, awaiting approval |
 | 4 | Clinical document summarisation (de-identified notes, extracted facts only, number and entity validation, clinician review) | Not started |
 | 5 | Open-weight model comparison (same gold set, prompts and retrieval configurations, registry entries with review) | Not started |
 | 6 | Fine-tuning, gated (reviewed instruction data, JSONL export, external LoRA training, deploy only if it beats base model plus RAG on held-out data) | Not started |
@@ -138,3 +138,62 @@ Sidebar entry **Ask CNR** (roles with `use:llm`). A chat with: a **Clinical / Ge
 
 ### Tests
 `api/tests/test_llm_phase2.py`: response shaping (citation matching, removed markers, ungrounded and withheld answers, intent list, shape errors, chunk shortening); `ask` and `retrieve` against a local fake Chakudya server (exact fields sent, no `session_id`, scope, history clipping and gating, masking, refusals send nothing); failure handling without leaks (401, bad shape, not configured); roles; a shared per-key limit; an audit sentinel test over real requests; key secrecy; and dashboard checks. The suite was also run against deliberately broken versions of the output screen, citation removal, history gate and `session_id` handling to confirm it fails when they are broken.
+
+## Phase 3: RAG evaluation laboratory
+
+Purpose: **establish evaluation results before any quality claim or any fine-tuning.** Dietitians write a gold-standard question set; a run sends it
+through the live gate to Chakudya; the laboratory records retrieval, citation, groundedness, refusal and latency measures per question; reviewers rate
+the answers; a summary states the numbers with confidence intervals and says plainly whether there is enough evidence to claim anything.
+No new language model is introduced; the answers are Chakudya's own, exactly as in phase 2.
+
+### Gold-standard question sets (`write:llm_gold`: data scientist, clinical reviewer, admin)
+A set holds up to 200 active questions. Each question has: the question text (max 1000 characters), a scope (clinical / general / both), **expected
+sources** (fragments of a source or title that should be retrieved and cited, max 8), **expected facts** (short facts a correct answer states, max 8,
+for example `115 mm`), a **should-refuse** flag, and a **split** (`dev` or `heldout`).
+- An answerable question must list at least one expected source or fact. A should-refuse question must list none (it tests the decision-support boundary).
+- **No patient information.** Every text (question, source, fact, set name, reviewer comment) passes the phase 1 identifier detector and is **rejected**, never masked, if it contains an identifier. A batch is all-or-nothing.
+- Questions are **immutable**. To change one, archive it and add a new one; archived questions leave future runs but stay with the results that used them. Each run stores a **fingerprint** (SHA-256) of exactly the questions it used, so two runs are comparable only when it matches.
+- `held-out` questions are excluded from the default run. They exist for the phase 6 gate (a fine-tuned model must beat base plus RAG on data nobody tuned against); running them is allowed, but tune only against `dev`.
+
+### What a run measures (`use:llm`)
+Each question goes through the same gate as a live one: the decision-support screen, the identifier gate (policy `reject`), then the server-side gateway to `/rag/retrieve` and `/rag/ask`. **Every call to Chakudya counts against the starting key's rate limit** (default 20 per minute, 300 per hour): a run waits out a per-minute window, and stops (status `stopped`, reason `rate_limit_hour`) if the hour's allowance is gone, keeping the results it has. A 50-question run is 100 calls, so expect several minutes at the default limit. Only one run can be active at a time. A run can be stopped by whoever started it, or by an admin. A restart marks active runs stopped (`restart`).
+
+| Measure | Definition |
+|---|---|
+| Retrieval hit rate, mean reciprocal rank | Of answerable questions with expected sources: an expected source appears in the top-k chunks from `/rag/retrieve` (and at which rank). Matching is case-insensitive containment in the chunk's source or title. |
+| Cited-source hit rate | The answer cites an expected source. |
+| Citation validity | Share of distinct `[n]` markers that point at a source Chakudya listed. |
+| Groundedness | (a) the answer cites at least one listed source; (b) **numeric support**: every number in the answer also appears in the retrieved text; (c) **fact coverage**: expected facts found in the answer. |
+| Refusals | Recall: should-refuse questions that the laboratory refused (decision-support screen) or withheld (output screen). Over-refusal: answerable questions refused or withheld. |
+| Latency | Median, 95th percentile and mean of both calls (waiting for the rate limit is not counted). |
+
+Rates are shown with **95% Wilson intervals**. These are proxies: they catch missing sources, invented citations and numbers no retrieved text supports; they **cannot tell whether a sentence is clinically correct**. The retrieval check and the answer come from two separate calls, so Chakudya may retrieve slightly different chunks for each. `GET /v1/llm/eval/method` returns these definitions and limits.
+
+### Reviewer ratings (`rate:llm`: clinical reviewer, admin)
+A reviewer rates each answer: **accuracy** 1 to 5, **supported** (every claim backed by the cited sources) and **safe** (no diagnosis, prescription or harmful advice), with an optional comment (identifier-screened, max 600 characters). One rating per reviewer and result; saving again replaces it. The run summary reports coverage, mean accuracy, supported and safe rates, and lists results rated unsafe.
+
+### Readiness: when numbers may be used to make a claim
+Every summary carries `readiness.sufficient_for_quality_claims`, **false** unless all hold: the run completed, with at least 30 questions, at least 20 answerable questions with expected sources, at least 5 should-refuse questions, no errors, reviewers have rated at least 50% of results, and no result was rated unsafe. Even then, results describe this question set, configuration and date only. Until it is true, do not describe the system as accurate, safe or better than anything, and do not start fine-tuning on the strength of these numbers.
+
+### Endpoints (`/v1/llm/eval`)
+- `GET /method`, `GET /sets`, `GET /sets/{id}`, `GET /runs[?set_id=]`, `GET /runs/{id}` (summary and per-question rows), `GET /results/{id}` (full metrics, the answer, ratings): `read:llm` (all roles except `service`).
+- `POST /sets`, `POST /sets/{id}/questions` (`{"questions": [...]}`, 1 to 50), `POST /questions/{id}/archive`: `write:llm_gold`.
+- `POST /sets/{id}/runs` (`{"split": "dev|heldout|all", "top_k": 1-10}`; `202`, the run proceeds in the background), `POST /runs/{id}/stop`: `use:llm`.
+- `POST /results/{id}/rating`: `rate:llm`.
+
+### What is stored
+Gold questions and expected facts (written by dietitians, identifier-checked), per-question metrics (numbers, booleans, fixed codes, and the names of retrieved and cited sources), the **answer text** (after the diagnosis and prescription screen, with identifiers masked, kept so reviewers can rate it), and reviewer ratings and comments. Withheld or refused questions keep no answer. **The audit log still holds counts and fixed codes only** (`llm.eval.set_created`, `questions_added`, `question_archived`, `run_started`, `run_finished`, `run_stop_requested`, `rated`): never a question, fact, answer or comment.
+
+### Dashboard: RAG evaluation
+Sidebar entry **RAG evaluation** (`read:llm`). *Question sets*: create a set, add questions one at a time or by pasting lines (`question | sources | facts`, or `question | refuse`), archive questions, start a run. *Runs*: status, the readiness statement (with its reasons), headline and detailed measures with intervals, per-question results, and a result page with the answer, retrieved and cited sources, automatic checks and the reviewer rating form. The page polls while a run is active. Nothing is kept in the browser.
+
+### Known limitations
+- The measures are rule-based proxies, not a judgement of clinical truth; reviewer ratings are the only check on that, and they are only as good as the reviewers (use at least two).
+- No Chichewa, Tumbuka or Yao boundary patterns exist yet, so the refusal measures cover English only. Gold questions in those languages can be added, but their refusal results should not be trusted.
+- A set written by one person measures that person's idea of a good question. Include real questions from the people who will use the service, including hard ones.
+- Runs use Chakudya's cache: repeated runs can return identical answers from cache for up to 5 minutes, which flatters latency.
+- Rate limits and the one-run-at-a-time rule are in memory, per process.
+- Chakudya's model and prompt are not visible to this laboratory, so a run records the Chakudya host and the laboratory's own versions, not a model version. Phase 5 adds model and prompt records.
+
+### Tests
+`api/tests/test_llm_phase3.py`: number and fact helpers, Wilson intervals, set fingerprints, readiness thresholds; gold-question validation (identifier rejection with nothing saved, expected sources or facts required, duplicates, immutability and archiving, roles); runs against a local fake Chakudya server (every metric, per-question results, refusals in both directions, the server-side key, configuration errors, split handling, upstream errors); per-key rate limiting of every upstream call (minute window wait, minute and hour stops); ownership of stop; reviewer ratings (roles, replacement, identifiers, ranges, summary effects); counts-only audit log and key secrecy; dashboard page.
