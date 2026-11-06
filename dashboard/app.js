@@ -753,7 +753,7 @@
     const box = h("div"), note = h("p", { class: "muted", role: "status" });
     const draw = (st) => {
       const lr = st.last_run;
-      box.replaceChildren(
+      box.replaceChildren(...[
         st.configured
           ? h("p", null, "Pulls " + st.targets.join(", ") + " (last " + st.months + " months) from " + st.source + " every " + st.interval_hours + " h, stores each change as a new dataset version" + (st.run_analysis ? " and runs a hotspot analysis on it." : "."))
           : h("div", { class: "notice" }, st.problem + " To switch it on, set SURVEILLANCE_SYNC_ENABLED=true and SURVEILLANCE_API_KEY (a CNR admin key) on the API service."),
@@ -762,7 +762,7 @@
           ? table(["Group", "Indicator", "Result", "Dataset version", "Hotspot analysis"], lr.results.map((r) => [r.population_group, r.indicator,
               (syncText[r.status] || r.status) + (r.error ? ": " + r.error : r.note ? ": " + r.note : ""), r.version ? "v" + r.version : "—",
               r.analysis ? (r.analysis_id ? h("button", { class: "link", onclick: () => { location.hash = "hotspots/" + r.analysis_id; } }, r.analysis) : r.analysis) : "—"]))
-          : null);
+          : null].filter(Boolean));   // replaceChildren(null) would print the word "null"
     };
     const btn = h("button", { class: "primary", disabled: !sy.configured, onclick: async () => {
       btn.disabled = true; note.textContent = "Starting…";
@@ -789,19 +789,22 @@
     const box = h("div"), note = h("p", { class: "muted", role: "status" });
     const draw = (st) => {
       const lr = st.last_run;
-      box.replaceChildren(
+      const item = (m) => {
+        const r = m.last_result;
+        return h("div", { class: "tsrow" },
+          h("b", null, m.name),
+          m.available ? h("div", null, "Under-5 screening rows. Predict " + m.target + ".") : h("div", { class: "muted" }, "Not yet. " + m.reason),
+          m.available ? h("div", { class: "muted" }, "Leave out: " + m.exclude.join(", ")) : null,
+          m.dataset_name ? h("div", { class: "muted" }, "Dataset: " + m.dataset_name + (m.latest_version ? " v" + m.latest_version : "")) : null,
+          r ? h("div", null, "Last result: " + (trainText[r.status] || r.status) + (r.error ? ": " + r.error : ""),
+            r.label_counts ? h("div", { class: "muted" }, Object.entries(r.label_counts).map(([k, v]) => k + " " + v).join(", ") + (r.ready_to_train === false ? ". Not ready to train: " + r.not_ready_reason : ". Ready to train.")) : null) : null);
+      };
+      box.replaceChildren(...[
         st.configured
           ? h("p", null, "Pulls de-identified, record-level training data (last " + st.months + " months) from " + st.source + " every " + st.interval_hours + " h and stores each change as a new dataset version. It only fetches data: it never trains, registers or deploys a model.")
           : h("div", { class: "notice" }, st.problem + " To switch it on, set TRAINING_SYNC_ENABLED=true on the API service (it uses the same SURVEILLANCE_API_KEY)."),
         lr ? h("p", { class: "muted" }, "Last run: " + (lr.trigger === "manual" ? "started by an admin" : "scheduled") + ", " + (lr.state === "running" ? "running now" : lr.state.replace(/_/g, " ")) + (lr.finished_at ? " at " + fmt(lr.finished_at) : "") + (lr.error ? ". " + lr.error : "") + ".") : null,
-        table(["Model", "What CNR can supply", "Dataset", "Last result"], st.models.map((m) => {
-          const r = m.last_result;
-          return [m.name,
-            m.available ? h("div", null, "Under-5 screening rows. Predict " + m.target + ".", h("div", { class: "muted" }, "Leave out: " + m.exclude.join(", "))) : h("div", { class: "muted" }, "Not yet. " + m.reason),
-            m.dataset_name ? m.dataset_name + (m.latest_version ? " v" + m.latest_version : "") : "—",
-            r ? h("div", null, (trainText[r.status] || r.status) + (r.error ? ": " + r.error : ""),
-              r.label_counts ? h("div", { class: "muted" }, Object.entries(r.label_counts).map(([k, v]) => k + " " + v).join(", ") + (r.ready_to_train === false ? ". Not ready to train: " + r.not_ready_reason : ". Ready to train.")) : null) : "—"];
-        })));
+        h("div", { class: "tslist" }, st.models.map(item))].filter(Boolean));
     };
     const btn = h("button", { class: "primary", disabled: !ty.configured, onclick: async () => {
       btn.disabled = true; note.textContent = "Starting…";
