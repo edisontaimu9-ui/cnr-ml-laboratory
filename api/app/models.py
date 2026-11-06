@@ -235,3 +235,40 @@ class NlpTrainingRun(Base):
     created_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class NlpModelVersion(Base):
+    """A registered, immutable copy of a trained NLP model plus its review trail (NLP lab stage 3).
+
+    Status: candidate -> in_review -> approved | rejected; approved -> retired. Approval is per language: `approved_languages_json`
+    lists the languages a reviewer signed off, and a language that was not evaluated on held-out text can never be on it.
+    There is no deploy step and nothing serves this model yet; approval only records that people reviewed it."""
+    __tablename__ = "mlab_nlp_model_versions"
+    __table_args__ = (UniqueConstraint("name", "version"), UniqueConstraint("training_run_id"))
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(64), index=True)
+    version: Mapped[int] = mapped_column(Integer)
+    training_run_id: Mapped[int] = mapped_column(ForeignKey("mlab_nlp_training_runs.id"))
+    corpus_version_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    artifact_uri: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    artifact_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    artifact_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    metrics_json: Mapped[dict] = mapped_column(JSON, default=dict)      # frozen copy of the evaluation
+    intended_use: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="candidate")
+    created_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    created_by_key_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    submitted_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    submitted_by_key_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    approved_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    reviewed_by_key_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    review_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    clinical_validation_ref: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    approved_languages_json: Mapped[list] = mapped_column(JSON, default=list)
+    warnings_acknowledged: Mapped[bool] = mapped_column(Boolean, default=False)
+    retired_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    retired_reason: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    history_json: Mapped[list] = mapped_column(JSON, default=list)
