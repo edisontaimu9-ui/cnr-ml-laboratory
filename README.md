@@ -234,13 +234,14 @@ It exists to turn nutrition data into usable intelligence for Malawi: research, 
 - **Report:** documents and entities per language and label, with warnings when a language has under 100 documents or a label under 50 examples.
 - Needs the `write:datasets` permission to upload and `read:datasets` to list. Reading `.spacy` files needs spaCy, which is in `requirements.txt`.
 
-## LLM intelligence (phase 1 of 6: contract and safety rules)
-- **Roadmap:** six sequential phases (Ask CNR, RAG evaluation, clinical summarisation, open-weight model comparison, gated fine-tuning), each approved before the next begins. See [docs/LLM_INTELLIGENCE.md](docs/LLM_INTELLIGENCE.md). Phase 1 adds no model and sends no text to any service.
+## LLM intelligence (phases 1 and 2 of 6: safety rules, then Ask CNR)
+- **Roadmap:** six sequential phases (Ask CNR, RAG evaluation, clinical summarisation, open-weight model comparison, gated fine-tuning), each approved before the next begins. See [docs/LLM_INTELLIGENCE.md](docs/LLM_INTELLIGENCE.md). Phase 1 fixed the safety rules; **phase 2 (Ask CNR)** relays questions to Chakudya's RAG routes. No new language model is introduced and nothing is stored.
 - **Never diagnoses.** Questions that ask for a diagnosis, or a prescription or dose for a patient, are refused; answers that state a diagnosis or prescription about a person are blocked. Criteria, guideline text and documented findings stay allowed. English patterns only so far.
 - **Nothing identifiable leaves the lab.** Text passes the NLP identifier detector first and is refused (default) or masked. The detector misses untitled names, addresses and dates of birth, so de-identification at the source is still required.
 - **Chakudya address and key are server-side only.** Environment variables (`CHAKUDYA_API_URL`, and `CHAKUDYA_CONSUMER_KEY` or, with `LLM_USE_SURVEILLANCE_KEY=true`, the existing CNR admin key `SURVEILLANCE_API_KEY`, sent only to the CNR host), one module reads the key, it is never returned, logged or audited, redirects are refused, and only the two RAG routes can be called.
 - **Audit logs hold counts and fixed codes only**, never text. **Limits are per API key** (default 20 per minute, 300 per hour).
-- **Endpoints:** `GET /v1/llm/contract`, `GET /v1/llm/status` (admin), `POST /v1/llm/precheck` (data scientist, clinical reviewer, admin). New permissions: `read:llm` (everyone but `service`) and `use:llm`.
+- **Ask CNR (phase 2).** `POST /v1/llm/ask` returns a cited answer (with detected intent and Clinical / General / Both scope) and `POST /v1/llm/retrieve` returns source passages only; both pass the same gate, no session is forwarded, answers are screened again before they are returned and citation markers are checked against the listed sources. The dashboard has an **Ask CNR** chat page. Quality has not been evaluated yet (phase 3). Off until `LLM_ENABLED=true`.
+- **Endpoints:** `GET /v1/llm/contract`, `GET /v1/llm/status` (admin), `POST /v1/llm/precheck`, `POST /v1/llm/ask`, `POST /v1/llm/retrieve` (data scientist, clinical reviewer, admin). New permissions: `read:llm` (everyone but `service`) and `use:llm`.
 
 ## Roles
 | Role | Can |

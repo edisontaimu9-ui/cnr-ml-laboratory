@@ -72,6 +72,7 @@
     { id: "hotspots", label: "Hotspots", perm: "read:hotspots", render: hotspots },
     { id: "nlp", label: "NLP", perm: "read:nlp", render: nlpPage },
     { id: "corpora", label: "NLP corpora", perm: "read:datasets", render: corporaPage },
+    { id: "ask", label: "Ask CNR", perm: "use:llm", render: askPage },
     { id: "predict", label: "Predict", perm: "predict:models", render: predictPage },
     { id: "registry", label: "Registry", perm: "read:models", render: registry },
     { id: "datasets", label: "Datasets", perm: "read:datasets", render: datasets },
@@ -1679,6 +1680,104 @@
     out.push(h("p", { class: "muted" }, "Topics and document type come from cue words and found entities. They are not probabilities and not a diagnosis."));
     r.warnings.forEach((w) => out.push(h("div", { class: "notice" }, w)));
     return out;
+  }
+
+  // ---- Ask CNR (LLM phase 2): a chat over Chakudya's RAG pipeline. The conversation lives in this page's memory only: it is not saved in
+  // the browser, and the server stores nothing. Text is always inserted as text, never as HTML.
+  const ASK_INTENTS = { food_search: "Food search", barcode_search: "Barcode search", nutrition_question: "Nutrition question", exchange_list: "Exchange list", enteral_formula: "Enteral formula", general_chat: "General chat", unknown: "Unknown" };
+  const ASK_SCOPES = [["clinical", "Clinical"], ["general", "General"], ["both", "Both"]];
+
+  function askAnswer(text, valid, onCite) {
+    const out = [];
+    text.split(/(\[\d{1,3}\])/).forEach((part) => {
+      const m = /^\[(\d{1,3})\]$/.exec(part);
+      if (m && valid.has(Number(m[1]))) out.push(h("sup", null, h("button", { class: "cite", type: "button", "aria-label": "Show source " + m[1], onclick: () => onCite(Number(m[1])) }, m[1])));
+      else if (part) out.push(part);
+    });
+    return h("div", { class: "answer" }, out);
+  }
+
+  function askBotMessage(d) {
+    const items = new Map();
+    const cites = (d.citations || []).map((c) => {
+      const li = h("li", { class: c.cited ? "cited" : "" }, h("b", null, "[" + c.id + "] "), c.title || c.source || "Source", c.title && c.source ? h("span", { class: "muted" }, " · " + c.source) : null, " ", h("span", { class: "badge " + (c.cited ? "" : "planned") }, c.cited ? "cited" : "not cited"));
+      items.set(c.id, li);
+      return li;
+    });
+    const focus = (n) => { const li = items.get(n); if (!li) return; li.scrollIntoView({ block: "nearest" }); li.classList.add("hl"); setTimeout(() => li.classList.remove("hl"), 1500); };
+    const head = h("div", { class: "msg-head" },
+      h("span", { class: "badge" }, "Intent: " + (ASK_INTENTS[d.intent] || ASK_INTENTS.unknown)),
+      h("span", { class: "badge explore" }, "Scope: " + (ASK_SCOPES.find((s) => s[0] === d.context) || ["", d.context])[1]),
+      h("span", { class: "badge " + (d.grounded ? "" : "watch") }, d.grounded ? "Cited" : "Not grounded"),
+      d.latency_ms != null ? h("span", { class: "muted" }, d.latency_ms + " ms") : null);
+    return h("div", { class: "msg bot" }, head, askAnswer(d.answer || "", new Set(items.keys()), focus),
+      (d.warnings || []).length ? h("ul", { class: "plain warn" }, d.warnings.map((w) => h("li", null, w))) : null,
+      d.masked_question ? h("p", { class: "muted" }, "Identifiers were masked before sending. What was sent: " + d.masked_question) : null,
+      cites.length ? h("details", { open: true }, h("summary", null, "Sources (" + cites.length + ")"), h("ol", { class: "sources" }, cites)) : null);
+  }
+
+  function askChunks(d) {
+    return h("div", { class: "msg bot" },
+      h("div", { class: "msg-head" }, h("span", { class: "badge explore" }, "Sources only"), h("span", { class: "muted" }, d.count + " found · " + d.latency_ms + " ms")),
+      d.count === 0 ? h("p", null, "No matching source text was found.") : null,
+      d.chunks.map((c) => h("div", { class: "chunk" },
+        h("div", { class: "msg-head" }, h("b", null, "#" + c.rank + " " + (c.title || c.source || "Source")), c.title && c.source ? h("span", { class: "muted" }, c.source) : null,
+          c.context ? h("span", { class: "badge" }, c.context) : null, c.score != null ? h("span", { class: "muted" }, "score " + c.score) : null),
+        h("p", { class: "snippet" }, c.snippet + (c.truncated ? " …" : "")))),
+      (d.warnings || []).length ? h("ul", { class: "plain warn" }, d.warnings.map((w) => h("li", null, w))) : null,
+      d.masked_question ? h("p", { class: "muted" }, "Identifiers were masked before sending. What was sent: " + d.masked_question) : null);
+  }
+
+  async function askPage() {
+    const c = await api("/v1/llm/contract");
+    let scope = "both", history = [], busy = false;
+    const log = h("div", { class: "chat-log", role: "log", "aria-live": "polite" });
+    const scopeBtns = ASK_SCOPES.map(([v, l]) => h("button", { type: "button", class: "seg", "aria-pressed": String(v === scope), onclick: () => { scope = v; scopeBtns.forEach((b, i) => b.setAttribute("aria-pressed", String(ASK_SCOPES[i][0] === v))); } }, l));
+    const mode = h("select", { id: "ask-mode", "aria-label": "What to return" }, h("option", { value: "ask" }, "Answer with citations"), h("option", { value: "retrieve" }, "Source passages only"));
+    const ids = h("select", { id: "ask-ids", "aria-label": "Identifiable text" },
+      h("option", { value: "reject" }, "Refuse text that has identifiers"), h("option", { value: "mask" }, "Mask identifiers and continue"));
+    ids.value = c.identifiers.default === "mask" ? "mask" : "reject";
+    const box = h("textarea", { id: "ask-q", rows: "3", maxlength: String(c.identifiers.max_chars), spellcheck: "true", placeholder: "Ask about nutrition criteria, guidelines, foods or formulas. Do not include names or contact details." });
+    const err = h("p", { class: "error", role: "alert" });
+    const add = (node) => { log.append(node); node.scrollIntoView({ block: "nearest" }); };
+    const send = h("button", { class: "primary", type: "button", onclick: async () => {
+      const q = box.value.trim();
+      if (!q || busy) { if (!q) err.textContent = "Type a question first."; return; }
+      err.textContent = ""; busy = true; send.disabled = true;
+      add(h("div", { class: "msg user" }, q));
+      box.value = "";
+      const pending = h("div", { class: "msg bot muted", role: "status" }, "Searching the knowledge base…");
+      add(pending);
+      try {
+        if (mode.value === "retrieve") {
+          const d = await api("/v1/llm/retrieve", { method: "POST", body: JSON.stringify({ query: q, context: scope, top_k: 5, identifiers: ids.value }) });
+          pending.replaceWith(askChunks(d));
+        } else {
+          const d = await api("/v1/llm/ask", { method: "POST", body: JSON.stringify({ question: q, context: scope, top_k: 6, history: history.slice(-6), identifiers: ids.value }) });
+          pending.replaceWith(askBotMessage(d));
+          history.push({ role: "user", text: q });
+          if (!d.answer_withheld) history.push({ role: "assistant", text: d.answer });
+          history = history.slice(-6);
+        }
+      } catch (e) {
+        pending.replaceWith(h("div", { class: "msg bot refused", role: "alert" }, h("b", null, "Not sent or no answer. "), e.message));
+      } finally { busy = false; send.disabled = false; box.focus(); }
+    } }, "Ask");
+    box.addEventListener("keydown", (ev) => { if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); send.click(); } });
+    const clear = h("button", { type: "button", onclick: () => { history = []; log.replaceChildren(); err.textContent = ""; } }, "Clear chat");
+    return [
+      h("h1", null, "Ask CNR"),
+      h("p", null, "Ask a question in plain language. Answers come from the Chakudya knowledge base and foods registry, each with its sources. No new language model is used in this laboratory; this page only relays your question to Chakudya."),
+      h("div", { class: "notice" }, c.notice),
+      h("div", { class: "ask-controls" },
+        h("div", null, h("label", null, "Knowledge scope"), h("div", { class: "segs", role: "group", "aria-label": "Knowledge scope" }, scopeBtns)),
+        h("div", null, h("label", { for: "ask-mode" }, "Return"), mode),
+        h("div", null, h("label", { for: "ask-ids" }, "Identifiable text"), ids)),
+      log,
+      h("label", { for: "ask-q" }, "Your question"), box, err,
+      h("div", { class: "ask-actions" }, send, clear, h("span", { class: "muted" }, "Ctrl+Enter to send · " + c.limits.per_minute_per_key + " per minute")),
+      h("p", { class: "muted" }, "This conversation is kept in this page only. It is not saved in your browser, and the laboratory stores no questions or answers. Follow-up questions send your last few turns to Chakudya so it can resolve what \"it\" refers to."),
+    ];
   }
 
   async function nlpPage() {

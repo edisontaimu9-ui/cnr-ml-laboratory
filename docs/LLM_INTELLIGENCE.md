@@ -4,8 +4,8 @@ Six sequential phases. Each is implemented, tested, documented, pushed and **app
 
 | Phase | Scope | Status |
 |---|---|---|
-| 1 | Contract and safety rules | Implemented, awaiting approval |
-| 2 | Ask CNR: RAG and natural-language interaction (`/v1/llm/ask`, `/v1/llm/retrieve`, chat page) | Not started |
+| 1 | Contract and safety rules | Approved |
+| 2 | Ask CNR: RAG and natural-language interaction (`/v1/llm/ask`, `/v1/llm/retrieve`, chat page) | Implemented, awaiting approval |
 | 3 | RAG evaluation laboratory (gold-standard questions, hit rate, citation validity, groundedness, refusals, latency, reviewer ratings) | Not started |
 | 4 | Clinical document summarisation (de-identified notes, extracted facts only, number and entity validation, clinician review) | Not started |
 | 5 | Open-weight model comparison (same gold set, prompts and retrieval configurations, registry entries with review) | Not started |
@@ -13,7 +13,7 @@ Six sequential phases. Each is implemented, tested, documented, pushed and **app
 
 ## Phase 1: contract and safety rules
 
-Contract name: `cnr-llm-contract/1`. Policy: `cnr-llm-policy/1`. Nothing in this phase calls a language model or sends any text to Chakudya.
+Contract name: `cnr-llm-contract/1`. Policy: `cnr-llm-policy/1`. Nothing in this phase calls a language model or sends any text to Chakudya (phase 2 below is the first to use the gateway).
 It provides the rules and the transport that phases 2 to 6 must go through.
 
 ### What is enforced, and where
@@ -64,3 +64,77 @@ It provides the rules and the transport that phases 2 to 6 must go through.
 
 ### Tests
 `api/tests/test_llm_phase1.py`: boundary (requests and answers), identifier gate (mask, refuse, evasion), audit allow-list and a sentinel test over real requests, per-key limits over HTTP, roles, secrecy of the key (settings repr, every response, audit rows, dashboard files, `render.yaml`, `.env.example`), and the gateway transport against a local HTTP server (Bearer header only, route allow-list, redirects refused, key-free errors, size and content-type checks).
+
+## Phase 2: Ask CNR (RAG and natural-language interaction)
+
+Adds two endpoints that relay questions to Chakudya's existing RAG routes, and a chat page in the dashboard. **No new language model is introduced.**
+The answer is produced by Chakudya's own pipeline (intent detection, retrieval, reranking, grounded answer); this laboratory adds the
+phase 1 rules in front of it and a second check behind it. Nothing is stored: no questions, answers, history or session.
+
+### What happens to a request
+
+1. **Authentication, role (`use:llm`) and the per-key rate limit** (`routers/llm.gate`, unchanged from phase 1). `ask` and `retrieve` share one allowance.
+2. **Decision-support screen** on the question (`llm_policy.screen_request`): requests to diagnose a person or to prescribe or dose for a patient are refused with `422`.
+3. **Identifier gate** (`llm_policy.prepare_for_external`): identifiable text is refused (default) or masked. The text that is sent is the sanitised or masked text, never the original.
+4. **Chat history** (ask only, at most the last 6 turns, each cut to 400 characters) passes steps 2 and 3 as well, because it leaves the laboratory too. A diagnosis request cannot be smuggled in as an earlier turn.
+5. **Gateway call** (`llm_gateway.post_json`, the only door): only the contract fields are sent: `query`, `context`, `top_k` and, for ask, `history`. **No `session_id` is ever forwarded**, so Chakudya's session memory is not used and nothing about the conversation is kept there on the laboratory's behalf.
+6. **Response shaping** (`llm_rag.py`): the answer goes through `llm_policy.enforce_output` (an answer that states a diagnosis or prescription about a person is replaced by the fixed refusal text); citation markers are checked against the listed sources; the intent is limited to Chakudya's published list; text lengths are capped.
+7. **Audit** (`llm.ask`, `llm.retrieve`): counts and fixed codes only.
+
+### `POST /v1/llm/ask` (`use:llm`: data scientist, clinical reviewer, admin)
+
+```json
+{"question": "What is the MUAC cut-off for severe acute malnutrition?", "context": "clinical", "top_k": 6,
+ "history": [{"role": "user", "text": "..."}, {"role": "assistant", "text": "..."}], "identifiers": "reject"}
+```
+
+| Field | Rule |
+|---|---|
+| `question` | Required. Up to `LLM_MAX_TEXT_CHARS` (default 4000) after the identifier gate. |
+| `context` | `clinical`, `general` or `both` (default). Passed to Chakudya as its knowledge scope. Anything else is `422`. |
+| `top_k` | 1 to 10, default 6. |
+| `history` | Optional list of `{role: user|assistant, text}`; the last 6 are used. |
+| `identifiers` | `reject` or `mask`; omitted means `LLM_IDENTIFIER_POLICY`. There is no `off`. |
+
+Response `200`:
+
+| Field | Meaning |
+|---|---|
+| `answer` | Chakudya's answer with invalid citation markers removed, or the fixed refusal text when `answer_withheld` is true. |
+| `intent` | One of `food_search`, `barcode_search`, `nutrition_question`, `exchange_list`, `enteral_formula`, `general_chat`, or `unknown`. |
+| `context` | The scope used. |
+| `citations` | The sources Chakudya listed: `id`, `source`, `title`, and `cited` (whether the answer actually cites that number). |
+| `grounded` | True only when the answer cites at least one listed source and was not withheld. |
+| `answer_withheld`, `withheld_categories` | The answer stated a diagnosis or prescription about a person (`output_diagnosis`, `output_prescription`). Citations are then shown as not cited. |
+| `warnings` | Plain-language flags: citation markers removed, answer cites nothing, no source found, identifiers masked. |
+| `decision`, `identifiers`, `masked_question` | `allowed` or `masked`; counts of identifiers found by type; the masked text that was sent (only when masking happened). |
+| `latency_ms`, `request_id`, `decision_support_only`, `stored` | Round-trip time to Chakudya; a random id; always `true`; always `false`. |
+
+Errors: `401`/`403` (key, role), `422` (refused: `diagnosis_request`, `prescribing_request`, `identifiers_found`, `empty`, `too_long`; or invalid input), `429` (rate limit, with `Retry-After`), `503` (LLM features off or not configured), `502` (Chakudya unreachable, refused the key, or answered in an unexpected shape). Error text never contains the key, a URL path or any request or response text.
+
+### `POST /v1/llm/retrieve` (same roles and gate)
+
+```json
+{"query": "iron-rich foods", "context": "both", "top_k": 5}
+```
+Returns Chakudya's matching knowledge-base chunks without an answer: `chunks` (`rank`, `source`, `title`, `context`, `score`, `snippet`, `truncated`, `metadata`), `count`, `latency_ms`. `top_k` is 1 to 20. Snippets are cut to 1200 characters and `metadata` keeps at most 8 short scalar values, so the route cannot be used for a bulk export of the knowledge base. The decision-support screen applies to the query, as for ask; the returned text is source material, not a generated statement about a person, so the output screen is not applied to it.
+
+### Dashboard: Ask CNR
+
+Sidebar entry **Ask CNR** (roles with `use:llm`). A chat with: a **Clinical / General / Both** selector, a choice between **Answer with citations** and **Source passages only**, and a choice of **Refuse** or **Mask** identifiable text. Each answer shows the **detected intent**, the scope, whether it is **cited**, the round-trip time, warnings, and a numbered **sources** list in which the citation numbers in the answer are buttons that highlight the matching source. Refusals and errors appear in the conversation as an alert. The conversation is held in the page's memory only (not in `localStorage`, not on the server); **Clear chat** empties it. All text is inserted as text, never as HTML.
+
+### Turning it on
+
+`render.yaml` still ships `LLM_ENABLED=false`, so until an administrator sets `LLM_ENABLED=true` in Render the two endpoints answer `503` ("LLM features are off") and the page shows that message. The key comes from the phase 1 settings (`CHAKUDYA_CONSUMER_KEY`, or `LLM_USE_SURVEILLANCE_KEY=true` for the CNR admin key). Check `GET /v1/llm/status` (admin) first.
+
+### Known limitations
+- **Quality is not measured yet.** Nothing in this phase shows that Chakudya's answers are correct, complete or well cited. Citation checks here are structural (a marker matches a listed source); they do not show that the source supports the sentence. Do not describe Ask CNR as accurate until phase 3 has produced evaluation results.
+- The output screen is an English-only pattern rule and reduces, but does not remove, the chance that an answer states a diagnosis or prescription. A clinician must still review anything used for a patient.
+- Chakudya's own caching can return an answer up to 5 minutes old (`cache` is audited as a code).
+- Chakudya's `intent` for a question is its own classification; it can be wrong, and the page shows it as information, not as a decision.
+- The 6-turn history is resolved by Chakudya's model, which this laboratory does not see or control.
+- Rate limits are in memory, per process, as in phase 1.
+- The identifier detector's limits (untitled names, addresses, dates of birth) apply to questions and to history.
+
+### Tests
+`api/tests/test_llm_phase2.py`: response shaping (citation matching, removed markers, ungrounded and withheld answers, intent list, shape errors, chunk shortening); `ask` and `retrieve` against a local fake Chakudya server (exact fields sent, no `session_id`, scope, history clipping and gating, masking, refusals send nothing); failure handling without leaks (401, bad shape, not configured); roles; a shared per-key limit; an audit sentinel test over real requests; key secrecy; and dashboard checks. The suite was also run against deliberately broken versions of the output screen, citation removal, history gate and `session_id` handling to confirm it fails when they are broken.

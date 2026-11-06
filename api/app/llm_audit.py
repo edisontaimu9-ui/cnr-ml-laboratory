@@ -19,6 +19,9 @@ _TYPE = re.compile(r"^[A-Z_]{1,20}$")
 ALLOWED = {
     "chars": "int", "identifiers_found": "int", "identifier_types": "counts", "decision": "code", "category": "code", "kind": "code",
     "mode": "code", "masked": "bool", "refused": "bool", "scope": "code", "retry_after_s": "int", "policy": "code", "reason": "code",
+    # phase 2 (ask / retrieve): counts and fixed codes about the exchange, never its text
+    "context": "code", "intent": "code", "cache": "code", "top_k": "int", "history_turns": "int", "sources": "int", "cited": "int",
+    "invalid_citations": "int", "latency_ms": "int", "output_blocked": "bool", "http_status": "int",
 }
 
 

@@ -127,3 +127,23 @@ button.loading::after{content:"";display:inline-block;width:.9em;height:.9em;mar
 .tabs{display:flex;gap:.4rem;flex-wrap:wrap;margin:.6rem 0 1.1rem}
 .tabs button{border-radius:99px;padding:.35rem .95rem}
 .tabs button[aria-current="page"]{background:var(--lake);border-color:var(--lake);color:#fff;font-weight:600}
+
+/* Ask CNR */
+.ask-controls{display:grid;grid-template-columns:repeat(auto-fit,minmax(14rem,1fr));gap:.75rem;margin:.75rem 0}
+.ask-controls label,#view label{display:block;font-weight:600;font-size:.85rem;margin-bottom:.2rem}
+.segs{display:flex;gap:0}.segs .seg{border-radius:0;flex:1}.segs .seg:first-child{border-radius:6px 0 0 6px}.segs .seg:last-child{border-radius:0 6px 6px 0}
+.segs .seg[aria-pressed="true"]{background:var(--lake);border-color:var(--lake);color:#fff;font-weight:600}
+.chat-log{display:flex;flex-direction:column;gap:.6rem;margin:.75rem 0;max-height:60vh;overflow-y:auto;padding:.25rem}
+.msg{padding:.7rem .9rem;border-radius:10px;border:1px solid var(--line);background:var(--surface);max-width:46rem;overflow-wrap:anywhere}
+.msg.user{align-self:flex-end;background:var(--lake-soft);border-color:var(--lake-soft);white-space:pre-wrap}
+.msg.refused{border-color:var(--bad);background:var(--bad-soft)}
+.msg-head{display:flex;flex-wrap:wrap;gap:.4rem;align-items:center;margin-bottom:.35rem}
+.answer{white-space:pre-wrap}
+sup button.cite{padding:0 .3rem;margin:0 .1rem;border-radius:4px;font-size:.75rem;line-height:1.3;color:var(--lake);border-color:var(--lake)}
+ol.sources{margin:.4rem 0;padding-left:1.2rem}
+ol.sources li{padding:.15rem .3rem;border-radius:4px;list-style-position:inside}
+ol.sources li.hl{background:var(--maize-soft)}
+ul.warn{color:#7a5b00}
+.chunk{border-top:1px solid var(--line);padding-top:.5rem;margin-top:.5rem}
+.snippet{white-space:pre-wrap;margin:.2rem 0}
+.ask-actions{display:flex;gap:.6rem;align-items:center;flex-wrap:wrap;margin:.4rem 0}

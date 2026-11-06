@@ -1,6 +1,6 @@
 // Caches the dashboard shell only. API calls (cross-origin) are never cached,
 // so lab data and API keys never touch the cache.
-const CACHE = "cnr-ml-lab-shell-v18";
+const CACHE = "cnr-ml-lab-shell-v19";
 const SHELL = ["./", "index.html", "style.css", "config.js", "app.js", "pwa.js",
   "manifest.webmanifest", "icons/icon-192.png", "icons/icon-512.png", "icons/apple-touch-icon.png"];
 
