@@ -66,3 +66,7 @@ def exists(uri: str) -> bool:
 def load_bytes(uri: str) -> bytes:
     """Raw bytes of a stored blob. Used to hash and copy artifacts; the registry never unpickles them."""
     return _path(uri).read_bytes()
+
+
+def load_bytes(uri: str) -> bytes:
+    return _path(uri).read_bytes()

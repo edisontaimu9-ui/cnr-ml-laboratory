@@ -12,7 +12,7 @@ from .catalog import CATALOG, LABEL_NOTE, LABEL_NOTES
 from .config import get_settings
 from .db import Base, SessionLocal, add_missing_columns, engine
 from .models import ApiKey, Exploration, Experiment, HotspotAnalysis, ModelDefinition, utcnow
-from .routers import admin, core, datasets, experiments, explorations, hotspots, integration, matcher, matching, nlp, notes, predict, registry, sync
+from .routers import admin, core, datasets, experiments, explorations, hotspots, integration, matcher, matching, nlp, nlp_corpora, notes, predict, registry, sync
 from .security import hash_key
 
 log = logging.getLogger("cnr-ml")
@@ -114,6 +114,7 @@ app.include_router(matching.router)
 app.include_router(matcher.router)
 app.include_router(notes.router)
 app.include_router(nlp.router)
+app.include_router(nlp_corpora.router)
 app.include_router(registry.router)
 app.include_router(predict.router)
 app.include_router(integration.router)

@@ -190,3 +190,30 @@ class LabNote(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     archived_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     history_json: Mapped[list] = mapped_column(JSON, default=list)
+
+
+class NlpCorpus(Base):
+    """A named collection of annotated text for training the NLP laboratory. Versions hold the validated, identifier-free text."""
+    __tablename__ = "mlab_nlp_corpora"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(160), unique=True)
+    description: Mapped[str] = mapped_column(Text, default="")
+    created_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class NlpCorpusVersion(Base):
+    __tablename__ = "mlab_nlp_corpus_versions"
+    __table_args__ = (UniqueConstraint("corpus_id", "version"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    corpus_id: Mapped[int] = mapped_column(ForeignKey("mlab_nlp_corpora.id"))
+    version: Mapped[int] = mapped_column(Integer)
+    sha256: Mapped[str] = mapped_column(String(64))
+    source_sha256: Mapped[str] = mapped_column(String(64))
+    doc_count: Mapped[int] = mapped_column(Integer, default=0)
+    entity_count: Mapped[int] = mapped_column(Integer, default=0)
+    storage_uri: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    approval_ref: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    report_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

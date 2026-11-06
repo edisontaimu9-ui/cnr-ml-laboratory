@@ -222,6 +222,13 @@ It exists to turn nutrition data into usable intelligence for Malawi: research, 
 - **Dashboard:** an **NLP** page with sample texts, a highlighted view of the entities (negated findings struck through), the structured record, the regression benchmark and a browser for the terminology lists.
 - **Next:** a trained entity model and a trainable text classifier need real, de-identified, expert-annotated text. They would use the same dataset, experiment and registry path as the other models.
 
+### Annotated text corpora (training data for the NLP lab, stage 1)
+- **Upload and validate only.** Training comes in a later stage. `POST /v1/nlp/corpora/inspect` checks a JSON Lines file and stores nothing; `POST /v1/nlp/corpora` (new corpus) and `POST /v1/nlp/corpora/{id}/versions` store a version. `GET /v1/nlp/corpora/format` shows the format.
+- **Format:** one document per line, `{"text": ..., "lang": "en|ny|tum|yao|mixed", "entities": [{"start", "end", "label"}]}`. Offsets are characters, end exclusive, entities may not overlap, and `PHI` is not a training label.
+- **Safety:** a file with identifiers (titled names, phones, emails, record or ID numbers) or any invalid line is refused whole; problems are reported by line number and identifier type, never by text. Only `text`, `lang` and `entities` are kept, exact duplicates are removed, and an approval reference is required. The audit log keeps counts only.
+- **Report:** documents and entities per language and label, with warnings when a language has under 100 documents or a label under 50 examples.
+- Needs the `write:datasets` permission to upload and `read:datasets` to list.
+
 ## Roles
 | Role | Can |
 |---|---|
