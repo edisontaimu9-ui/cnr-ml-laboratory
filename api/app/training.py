@@ -9,6 +9,7 @@ Rules
 - Logistic regression is the interpretable option: its coefficients are reported, and its probabilities are calibrated
   inside the pipeline (cross-fitted on the training part only) and checked on the hold-out set.
 """
+import re
 import warnings as pywarnings
 from dataclasses import dataclass, field
 
@@ -79,7 +80,15 @@ class Config:
     max_iter: int = 500                        # MLP and logistic: upper limit on training iterations
     compare_xgboost: bool = True               # MLP and logistic: also fit XGBoost on the same split
     logistic_c: float = 1.0                    # logistic only: inverse L2 strength (smaller = stronger penalty)
+    leakage_tokens: list[str] = field(default_factory=list)      # column-name words that may not be features (see catalog.py)
+    leakage_substrings: list[str] = field(default_factory=list)  # same, for run-together names such as "bloodpressure"
     calibration: str = "none"                  # logistic only: none | sigmoid | isotonic (recalibration is opt-in, see _calibration_verdict)
+
+
+def _is_leaky(col: str, cfg: Config) -> bool:
+    low = col.lower()
+    words = {w for w in re.split(r"[^a-z0-9]+", low) if w}
+    return bool(words & set(cfg.leakage_tokens)) or any(sub in low.replace("_", "").replace(" ", "") for sub in cfg.leakage_substrings)
 
 
 def _prepare(df: pd.DataFrame, cfg: Config, warnings: list[str]):
@@ -98,6 +107,10 @@ def _prepare(df: pd.DataFrame, cfg: Config, warnings: list[str]):
         raise TrainingError("Unknown feature column: " + missing[0][:80])
     if cfg.target in cand:
         raise TrainingError("The target cannot also be a feature.")
+    banned = [c for c in cand if _is_leaky(c, cfg)]
+    if banned:
+        raise TrainingError(f"'{banned[0][:60]}' defines or reveals this model's label and cannot be a feature. "
+                            "Exclude it (and any other blood pressure or diagnosis columns) and run again.")
     num, cat, n = [], [], len(df)
     for c in cand:
         s = df[c]

@@ -5,7 +5,7 @@ An independent machine-learning platform for the Chakudya Nutrition Registry (CN
 You can upload and de-identify datasets, train and evaluate models, review and approve them, serve the deployed version, and let CNR request assessments through a dedicated, authenticated contract. Predictions are never presented as confirmed diagnoses.
 
 ## Platform
-- **ML API** (`api/`, FastAPI): API-key authentication, four roles, audit log, full metadata schema (datasets, versions, experiments, model versions), a catalogue of the seven planned model targets, `/health`.
+- **ML API** (`api/`, FastAPI): API-key authentication, four roles, audit log, full metadata schema (datasets, versions, experiments, model versions), a catalogue of the eight planned model targets, `/health`.
 - **Dashboard** (`dashboard/`, static HTML/JS, no build step): installable as an app (PWA), with overview, models, experiments, exploration, hotspots, datasets, registry, prediction, CNR integration, audit log and key management. Pages show honest empty states until there is data.
 - **Deployment**: Dockerfiles, `docker-compose.yml`, `render.yaml`, CI, Supabase RLS script.
 - It does not touch CNR's production API. The two will talk only through authenticated endpoints (see CNR integration below).
@@ -28,6 +28,12 @@ You can upload and de-identify datasets, train and evaluate models, review and a
 - **Guards:** at least 50 rows and 10 examples per class; warnings for small datasets, a model that does not beat the baseline, and suspiciously strong results (likely label leakage, for example MUAC when predicting a nutrition status derived from it).
 - **Governance:** a run never makes a model available. The first completed run only moves the catalogue entry from `planned` to `in_development`. The fitted pipeline is saved privately for the registry and is never served.
 - **Endpoints:** `POST /v1/experiments`, `GET /v1/experiments`, `GET /v1/experiments/{id}`. One experiment runs at a time.
+
+## Hypertension risk model (`hypertension-risk`)
+- **Purpose:** estimate the chance that someone has raised blood pressure from age, BMI, waist circumference, diet (salt, alcohol) and physical activity, for community screening where a cuff is not always available. A high estimate means *measure blood pressure*, never *has hypertension*.
+- **Label:** from measured blood pressure (for example the average of repeated seated readings at or above 140/90 mmHg, or the threshold agreed with the data owner). The label note on the catalogue entry says so.
+- **Leakage guard:** blood pressure readings and diagnosis or treatment columns (names containing systolic, diastolic, SBP, DBP, BP, HTN, hypertension, antihypertensive) are **refused as features** for this model: the run fails with a message naming the column. Exclude them next to the target and run again. Other models are unaffected.
+- **Training:** the same experiment flow as every model (XGBoost, MLP or interpretable logistic regression with odds ratios and calibration). Logistic regression is a good first choice here because the odds ratios are readable by clinicians.
 
 ## Exploration (unsupervised analysis)
 - **A separate type, not a model.** An *exploration* looks for groups of similar rows (**clustering**, k-means) and unusual rows (**anomaly detection**, isolation forest) in a de-identified dataset version. There is no target column and no catalogue model. It is for understanding data and checking data quality.

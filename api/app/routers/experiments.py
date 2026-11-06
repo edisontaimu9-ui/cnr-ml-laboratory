@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .. import audit, storage, training
+from ..catalog import LEAKAGE_SUBSTRINGS, LEAKAGE_TOKENS
 from ..jobs import STALE_MINUTES, another_job_running
 from ..db import SessionLocal, get_db
 from ..models import DatasetVersion, Experiment, ModelDefinition, utcnow
@@ -85,7 +86,9 @@ def create_experiment(body: ExperimentCreate, request: Request, background: Back
                           max_depth=body.max_depth, learning_rate=body.learning_rate,
                           balance_classes=body.balance_classes, algorithm=body.algorithm,
                           hidden_layers=body.hidden_layers, alpha=body.alpha, max_iter=body.max_iter,
-                          compare_xgboost=body.compare_xgboost, logistic_c=body.logistic_c, calibration=body.calibration)
+                          compare_xgboost=body.compare_xgboost, logistic_c=body.logistic_c, calibration=body.calibration,
+                          leakage_tokens=sorted(LEAKAGE_TOKENS.get(d.slug, ())),
+                          leakage_substrings=list(LEAKAGE_SUBSTRINGS.get(d.slug, ())))
     e = Experiment(model_definition_id=d.id, dataset_version_id=v.id, framework=body.algorithm, status="queued",
                    params_json={"config": asdict(cfg), "dataset_id": v.dataset_id, "dataset_version": v.version,
                                 "model_slug": d.slug},

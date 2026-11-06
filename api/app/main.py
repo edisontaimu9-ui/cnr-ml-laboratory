@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select
 
 from . import surveillance_sync
-from .catalog import CATALOG, LABEL_NOTE
+from .catalog import CATALOG, LABEL_NOTE, LABEL_NOTES
 from .config import get_settings
 from .db import Base, SessionLocal, add_missing_columns, engine
 from .models import ApiKey, Exploration, Experiment, HotspotAnalysis, ModelDefinition, utcnow
@@ -25,7 +25,7 @@ def _seed() -> None:
         for slug, name, task, desc in CATALOG:
             if slug not in existing:  # never overwrite a status changed since
                 db.add(ModelDefinition(slug=slug, name=name, task_type=task,
-                                       description=desc, label_source=LABEL_NOTE))
+                                       description=desc, label_source=LABEL_NOTES.get(slug, LABEL_NOTE)))
         key = settings.bootstrap_admin_key
         if key and len(key) >= 32:
             row = db.scalar(select(ApiKey).where(ApiKey.prefix == "boot"))
