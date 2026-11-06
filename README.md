@@ -5,7 +5,7 @@ An independent machine-learning platform for the Chakudya Nutrition Registry (CN
 You can upload and de-identify datasets, train and evaluate models, review and approve them, serve the deployed version, and let CNR request assessments through a dedicated, authenticated contract. Predictions are never presented as confirmed diagnoses.
 
 ## Platform
-- **ML API** (`api/`, FastAPI): API-key authentication, four roles, audit log, full metadata schema (datasets, versions, experiments, model versions), a catalogue of the eight planned model targets, `/health`.
+- **ML API** (`api/`, FastAPI): API-key authentication, four roles, audit log, full metadata schema (datasets, versions, experiments, model versions), a catalogue of the nine planned model targets, `/health`.
 - **Dashboard** (`dashboard/`, static HTML/JS, no build step): installable as an app (PWA), with overview, models, experiments, exploration, hotspots, datasets, registry, prediction, CNR integration, audit log and key management. Pages show honest empty states until there is data.
 - **Deployment**: Dockerfiles, `docker-compose.yml`, `render.yaml`, CI, Supabase RLS script.
 - It does not touch CNR's production API. The two will talk only through authenticated endpoints (see CNR integration below).
@@ -34,6 +34,12 @@ You can upload and de-identify datasets, train and evaluate models, review and a
 - **Label:** from measured blood pressure (for example the average of repeated seated readings at or above 140/90 mmHg, or the threshold agreed with the data owner). The label note on the catalogue entry says so.
 - **Leakage guard:** blood pressure readings and diagnosis or treatment columns (names containing systolic, diastolic, SBP, DBP, BP, HTN, hypertension, antihypertensive) are **refused as features** for this model: the run fails with a message naming the column. Exclude them next to the target and run again. Other models are unaffected.
 - **Training:** the same experiment flow as every model (XGBoost, MLP or interpretable logistic regression with odds ratios and calibration). Logistic regression is a good first choice here because the odds ratios are readable by clinicians.
+
+## Metabolic syndrome screen (`metabolic-syndrome-screen`)
+- **Purpose:** screen for metabolic syndrome from cheap measurements (waist, BMI, age, diet) where blood tests are not available. A positive result means *send for blood tests*, never *has metabolic syndrome*.
+- **Label:** the harmonised definition (IDF/AHA/NHLBI 2009, or the one agreed with the data owner): three or more of raised waist, raised triglycerides, low HDL, raised blood pressure, raised fasting glucose, or treatment for them.
+- **Leakage guard:** triglycerides, HDL, glucose, blood pressure, diabetes, statin or lipid-treatment and syndrome columns are **refused as features** (the run fails and names the column). Exclude them next to the target.
+- **Waist overlap:** waist circumference is both a criterion and the main cheap predictor. It is allowed, but every run that uses it carries a warning that scores overstate what the other features can do. Train once without waist and compare.
 
 ## Exploration (unsupervised analysis)
 - **A separate type, not a model.** An *exploration* looks for groups of similar rows (**clustering**, k-means) and unusual rows (**anomaly detection**, isolation forest) in a de-identified dataset version. There is no target column and no catalogue model. It is for understanding data and checking data quality.

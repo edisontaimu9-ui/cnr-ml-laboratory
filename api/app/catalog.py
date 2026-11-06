@@ -18,6 +18,8 @@ CATALOG = [
     ("hypertension-risk", "Hypertension risk", "classification",
      "Estimate risk of hypertension from age, BMI, waist circumference, diet (salt, alcohol) and physical activity, "
      "for community screening when a blood pressure cuff is not always available."),
+    ("metabolic-syndrome-screen", "Metabolic syndrome screen", "classification",
+     "Screen for metabolic syndrome from cheap measurements (waist, BMI, age, diet) when blood tests are not available."),
     ("ckd-nutrition-risk", "CKD nutrition risk", "classification",
      "Estimate nutrition risk in patients with chronic kidney disease."),
     ("hospital-malnutrition-risk", "Hospital malnutrition risk", "classification",
@@ -37,15 +39,32 @@ LABEL_NOTES = {
         "Features: age, BMI, waist circumference, salt and alcohol intake, physical activity. A positive result means "
         "'measure blood pressure', never 'has hypertension'."
     ),
+    "metabolic-syndrome-screen": (
+        "Label from the harmonised definition (IDF/AHA/NHLBI 2009, or the definition the data owner agrees): three or more "
+        "of raised waist circumference, raised triglycerides, low HDL cholesterol, raised blood pressure and raised fasting "
+        "glucose, or treatment for them. Triglycerides, HDL, glucose, blood pressure and treatment or diagnosis columns "
+        "must never be used as features. Waist circumference is itself one of the five criteria: it is allowed here because "
+        "it is the cheap measurement the screen relies on, but results must be read with that overlap in mind (the run warns, "
+        "and the same model without waist is the fairer check). A positive result means 'send for blood tests', never 'has "
+        "metabolic syndrome'."
+    ),
 }
 
 # Column-name words that may not be features for a model (they define or reveal its label). Whole words, split on
 # anything that is not a letter or digit, plus the run-together forms in LEAKAGE_SUBSTRINGS.
 LEAKAGE_TOKENS = {
+    "metabolic-syndrome-screen": {"tg", "hdl", "fpg", "fbg", "fbs", "sbp", "dbp", "bp", "htn", "metsyn"},
     "hypertension-risk": {"systolic", "diastolic", "sbp", "dbp", "bp", "htn", "hypertension", "hypertensive", "antihypertensive"},
 }
 LEAKAGE_SUBSTRINGS = {
+    "metabolic-syndrome-screen": ("triglycer", "hdl", "glucose", "bloodpressure", "systolic", "diastolic", "hypertens",
+                                  "diabet", "metabolicsyndrome", "statin", "fibrate", "lipid"),
     "hypertension-risk": ("bloodpressure", "systolic", "diastolic", "hypertens"),
+}
+
+# Features that are part of the label definition but are allowed, with a warning on every run.
+LEAKAGE_WARN_SUBSTRINGS = {
+    "metabolic-syndrome-screen": ("waist",),
 }
 
 SAFETY_NOTICE = (
