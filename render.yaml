@@ -50,6 +50,14 @@ services:
         value: "true"
       - key: LLM_IDENTIFIER_POLICY
         value: reject
+      # LLM intelligence (phase 4): clinical document summarisation. Off until you set SUMMARY_ENABLED=true.
+      # GROQ_API_KEY is a secret: enter it in the Render dashboard (never in this file). The model is shown only extracted facts, never the note.
+      - key: SUMMARY_ENABLED
+        value: "false"
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        value: llama-3.3-70b-versatile
   - type: web
     name: cnr-ml-lab-dashboard
     runtime: static

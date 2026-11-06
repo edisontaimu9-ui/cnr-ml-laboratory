@@ -48,16 +48,22 @@ class Gated:
         return {"X-RateLimit-Remaining-Minute": str(self.remaining["minute"]), "X-RateLimit-Remaining-Hour": str(self.remaining["hour"])}
 
 
-def gate(request: Request, p: Principal = Depends(require("use:llm")), db: Session = Depends(get_db)) -> Gated:
-    """Authentication and role first (401/403 do not use the allowance), then the per-key rate limit. Reused by every LLM endpoint."""
-    try:
-        return Gated(p, llm_limits.acquire(p.key_id))
-    except llm_limits.RateLimited as e:
-        with _throttle_lock:
-            first = _audit_throttle.hit(str(p.key_id))
-        if first:
-            llm_audit.record(db, "llm.rate_limited", principal=p, request=request, scope=e.scope, retry_after_s=e.retry_after)
-        raise HTTPException(429, f"Too many requests this {e.scope}. Wait and try again.", headers={"Retry-After": str(e.retry_after)})
+def _gate_for(permission: str):
+    def dep(request: Request, p: Principal = Depends(require(permission)), db: Session = Depends(get_db)) -> Gated:
+        try:
+            return Gated(p, llm_limits.acquire(p.key_id))
+        except llm_limits.RateLimited as e:
+            with _throttle_lock:
+                first = _audit_throttle.hit(str(p.key_id))
+            if first:
+                llm_audit.record(db, "llm.rate_limited", principal=p, request=request, scope=e.scope, retry_after_s=e.retry_after)
+            raise HTTPException(429, f"Too many requests this {e.scope}. Wait and try again.", headers={"Retry-After": str(e.retry_after)})
+    return dep
+
+
+# Authentication and role first (401/403 do not use the allowance), then the per-key rate limit. Reused by every LLM endpoint.
+gate = _gate_for("use:llm")
+gate_summarise = _gate_for("summarise:llm")      # phase 4: same limiter, a different role (clinical reviewer, admin)
 
 
 def _mode(requested: str | None) -> str:
@@ -74,7 +80,7 @@ def contract():
                             "default": _mode(None), "choices": ["reject", "mask"], "max_chars": s.llm_max_text_chars},
             "limits": {"per_minute_per_key": s.llm_rate_limit_per_min, "per_hour_per_key": s.llm_rate_limit_per_hour},
             "audit": "Counts and fixed codes only; never text, questions, answers or identifiers.",
-            "stored": False, "endpoints": ["GET /v1/llm/contract", "POST /v1/llm/precheck", "POST /v1/llm/ask", "POST /v1/llm/retrieve", "GET /v1/llm/status (admin)"], "notice": llm_policy.NOTICE}
+            "stored": False, "endpoints": ["GET /v1/llm/contract", "POST /v1/llm/precheck", "POST /v1/llm/ask", "POST /v1/llm/retrieve", "POST /v1/llm/summarise", "POST /v1/llm/summarise/review", "GET /v1/llm/summarise/status", "GET /v1/llm/status (admin)"], "notice": llm_policy.NOTICE}
 
 
 @router.get("/status", dependencies=[Depends(require("read:integration"))])

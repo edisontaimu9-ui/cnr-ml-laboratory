@@ -25,6 +25,10 @@ ALLOWED = {
     # phase 3 (evaluation): counts and fixed codes about sets, runs and ratings, never question, answer or comment text
     "questions": "int", "completed": "int", "errors": "int", "split": "code", "expected_sources": "int", "expected_facts": "int",
     "should_refuse": "bool", "accuracy": "int", "supported": "bool", "safe": "bool", "comment_chars": "int", "name_chars": "int",
+    # phase 4 (document summarisation): counts and fixed codes about extraction, validation and review, never note or summary text
+    "facts": "int", "sentences": "int", "sentences_valid": "int", "sentences_rejected": "int", "numbers_checked": "int",
+    "reject_reasons": "counts", "model_used": "bool", "model": "code", "prompt": "code", "tokens_in": "int", "tokens_out": "int",
+    "review": "code", "attest_facts": "bool", "attest_numbers": "bool", "edited": "bool", "age_s": "int", "flagged_sentences": "int",
 }
 
 

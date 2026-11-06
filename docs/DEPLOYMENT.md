@@ -32,3 +32,6 @@ Open https://ml-lab.chakudya.xyz, sign in with `BOOTSTRAP_ADMIN_KEY`, create a n
 
 ## Environment variables
 See `.env.example`. Never commit `.env`.
+
+**LLM phase 4 (clinical document summarisation).** No new service, disk, table or SQL. `render.yaml` declares `SUMMARY_ENABLED=false`, `GROQ_MODEL` and an empty `GROQ_API_KEY` (`sync: false`). To switch it on: create a Groq API key, enter it as the secret `GROQ_API_KEY` in the Render dashboard (never in the repo, a chat or a ticket), then set `SUMMARY_ENABLED=true`. Fact extraction works with no key; the model summary needs it. In production the address must be an https `groq.com` address, so the key cannot be redirected. Confirm the model names in `GROQ_MODEL`/`GROQ_MODELS` against Groq's current list, and confirm with your governance owner that sending de-identified extracted facts to Groq is permitted. Check `GET /v1/llm/summarise/status`: it shows the host name, model names and whether a key exists, never the key. Rotate the key by creating a new one, updating the secret and revoking the old one.
+

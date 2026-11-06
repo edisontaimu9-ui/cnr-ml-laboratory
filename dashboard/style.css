@@ -149,3 +149,11 @@ ul.warn{color:#7a5b00}
 .ask-actions{display:flex;gap:.6rem;align-items:center;flex-wrap:wrap;margin:.4rem 0}
 .notice.ok{border-left-color:var(--lake);background:var(--lake-soft)}
 .chk{font-weight:400;display:flex;gap:.4rem;align-items:flex-start;margin:.3rem 0}
+
+/* LLM phase 4: summarise note */
+.sum-sentences{padding-left:1.25rem}
+.sum-sentences li{margin:.35rem 0}
+.sum-sentences .badge{margin-left:.25rem;text-decoration:none}
+tr.hl{background:var(--maize-soft)}
+label.check{display:flex;gap:.5rem;align-items:flex-start;margin:.35rem 0}
+#sum-copy{width:100%;margin-top:.5rem}

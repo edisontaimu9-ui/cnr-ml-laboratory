@@ -58,6 +58,18 @@ class Settings(BaseSettings):
     # Per API key (not per address). In-memory, so per process, like the other limiters.
     llm_rate_limit_per_min: int = 20
     llm_rate_limit_per_hour: int = 300
+    # LLM intelligence, phase 4 (clinical document summarisation). A Groq-hosted open-weight model writes a summary restricted to facts the
+    # rule engine extracted; the model never receives the note itself. The key is server-side only (SecretStr), like the Chakudya key.
+    # Off until SUMMARY_ENABLED=true. Fact extraction alone (no model) then works without a key; the model summary also needs GROQ_API_KEY.
+    summary_enabled: bool = False
+    groq_api_key: SecretStr = SecretStr("")
+    groq_api_url: str = "https://api.groq.com/openai/v1"    # production accepts only an https groq.com address
+    groq_model: str = "llama-3.3-70b-versatile"             # default; verify against Groq's current model list
+    groq_models: str = "llama-3.3-70b-versatile,llama-3.1-8b-instant"   # allow-list a request may choose from (comma separated)
+    summary_max_chars: int = 8000
+    summary_max_output_tokens: int = 700
+    summary_timeout_s: float = 30.0
+    summary_review_ttl_s: int = 3600
     service_version: str = "0.9.0"
     # Dataset ingestion
     dataset_storage_dir: str = "./data/datasets"

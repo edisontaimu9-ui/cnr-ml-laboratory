@@ -6,8 +6,8 @@ Six sequential phases. Each is implemented, tested, documented, pushed and **app
 |---|---|---|
 | 1 | Contract and safety rules | Approved |
 | 2 | Ask CNR: RAG and natural-language interaction (`/v1/llm/ask`, `/v1/llm/retrieve`, chat page) | Approved |
-| 3 | RAG evaluation laboratory (gold-standard questions, hit rate, citation validity, groundedness, refusals, latency, reviewer ratings) | Implemented, awaiting approval |
-| 4 | Clinical document summarisation (de-identified notes, extracted facts only, number and entity validation, clinician review) | Not started |
+| 3 | RAG evaluation laboratory (gold-standard questions, hit rate, citation validity, groundedness, refusals, latency, reviewer ratings) | Approved |
+| 4 | Clinical document summarisation (de-identified notes, extracted facts only, number and entity validation, clinician review) | Implemented, awaiting approval |
 | 5 | Open-weight model comparison (same gold set, prompts and retrieval configurations, registry entries with review) | Not started |
 | 6 | Fine-tuning, gated (reviewed instruction data, JSONL export, external LoRA training, deploy only if it beats base model plus RAG on held-out data) | Not started |
 
@@ -197,3 +197,94 @@ Sidebar entry **RAG evaluation** (`read:llm`). *Question sets*: create a set, ad
 
 ### Tests
 `api/tests/test_llm_phase3.py`: number and fact helpers, Wilson intervals, set fingerprints, readiness thresholds; gold-question validation (identifier rejection with nothing saved, expected sources or facts required, duplicates, immutability and archiving, roles); runs against a local fake Chakudya server (every metric, per-question results, refusals in both directions, the server-side key, configuration errors, split handling, upstream errors); per-key rate limiting of every upstream call (minute window wait, minute and hour stops); ownership of stop; reviewer ratings (roles, replacement, identifiers, ranges, summary effects); counts-only audit log and key secrecy; dashboard page.
+
+## Phase 4: clinical document summarisation
+
+Takes a **de-identified** clinical note, extracts structured facts with the rule engine, optionally has a **Groq-hosted open-weight model** write a short
+summary **restricted to those facts**, validates every sentence against the facts and the note, and requires **clinician review**. **Nothing is stored**:
+not the note, the facts or the summary, in the database, the audit log or a log file. No Chakudya call is made.
+
+### What happens to a note (`POST /v1/llm/summarise`, `summarise:llm`: clinical reviewer, admin)
+
+1. **Authentication, role and the per-key rate limit** (the same limiter as phases 1 to 3; one summary is one request).
+2. **Identifier gate** (`llm_policy.prepare_for_external`, kind `document`): identifiable text is refused (default) or masked. The request-level
+   diagnosis screen is not applied to the note (a note may say "diagnosed with"); the **output** is screened sentence by sentence instead.
+3. **Fact extraction** (`llm_extract`, the `nlp-rules-1` engine): measurements (type, value, unit) and condition, symptom, food, intervention, nutrient and
+   population terms, each with a status (`present`, `negated`, `uncertain`, `historical`, `family`) and the exact span of the note it came from. Identifiers
+   are never facts.
+4. **Model call** (`llm_groq`, only when `use_model` is true and there is at least one fact): the model receives the fixed rules (`llm_policy.SYSTEM_RULES`
+   plus the summary rules) and **only the facts**: lexicon terms, numbers, units, statuses. **It never receives the note or any span of it**, so text in a note
+   (including an instruction hidden in it) cannot reach the model. Temperature 0, JSON output, capped length.
+5. **Validation** (`llm_summary.validate_output`), per sentence. A sentence that fails is **dropped, not repaired**, and is not returned:
+
+| Check | Reason code | A sentence is dropped when |
+|---|---|---|
+| Structure | `FORMAT`, `NO_FACT` | it is not `{text, facts}`, is over-long, or cites no fact or an unknown fact id |
+| Numbers | `NUMBER` | a number is not in the note **and** in a cited fact (so rounding and unit conversion are rejected), or a spelled-out number is not in the note |
+| Measurements | `MEASUREMENT` | a measurement read back from the sentence by the same rule engine does not match a cited fact in type, value and unit |
+| Entities | `ENTITY` | a condition, symptom, food, intervention, nutrient or population term is not a cited fact |
+| Status | `NEGATION` | a condition or symptom has a different status than the cited fact (negated finding written as present, history as current, ...) |
+| Boundary | `SCREEN` | it states a diagnosis or prescription about a person (`llm_policy.screen_output`) |
+| Identifiers | `IDENTIFIER` | it contains an identifier |
+
+   Words that are not in the note, the facts or a short list of ordinary summary words are **not** dropped but **flagged** (`unverified_words`) so the reviewer
+   sees them. The response also lists the facts the summary did not mention.
+6. **Clinician review.** The response is `pending_clinician_review` and `usable_for_patient: false`. `POST /v1/llm/summarise/review` (`review:llm`: clinical
+   reviewer, admin) records the decision: `accepted` and `accepted_with_edits` need both attestations (facts checked, numbers checked); `rejected` needs none.
+   Only the key that made a summary can review it, once, within `SUMMARY_REVIEW_TTL_S` (default 1 hour). The dashboard enables **Copy summary** only after
+   a review is recorded. The server cannot stop someone copying text from the screen: the review is an attestation and an audit record, not a technical lock.
+
+### Request and response
+
+```json
+{"note": "Child, weight 7.2 kg, MUAC 112 mm. No oedema. Suspected severe acute malnutrition.", "identifiers": "reject", "use_model": true, "model": null}
+```
+`use_model: false` returns the facts only (no model call, no key needed). `model` must be in `GROQ_MODELS`; omitted means `GROQ_MODEL`.
+
+`200`: `extraction` (`facts`, `counts`, `limits`), `summary` (`sentences` with the fact ids each cites and any flags, `text`, `rejected` with counts and reason
+codes only, `coverage`, `generated_by` with provider, model and prompt version) or `null`, `review`, `warnings`, `identifiers`, `masked_note` (only when masking
+happened), `usable_for_patient: false`, `stored: false`. Errors: `401`/`403`, `422` (identifiers, empty, too long, model not allowed), `429`, `503` (summarisation
+off or not configured), `502` (Groq unreachable, key refused, or an answer that is not the requested JSON). Error text never contains the key, a path or any note or model text.
+
+`GET /v1/llm/summarise/status` (`read:llm`): whether the model is ready, the Groq host name, the model names, the limits and the review checklist. Never the key.
+
+### What is audited
+Counts and fixed codes only (`llm.summarise`, `llm.summary.reviewed`): characters, identifier counts, facts, sentences, valid and rejected sentences,
+rejection reason counts, numbers checked, token counts, the model and prompt codes, the review decision and attestations. Never the note, a fact, a summary
+sentence or a comment. The audit allow-list drops anything else.
+
+### Configuration
+| Variable | Default | Meaning |
+|---|---|---|
+| `SUMMARY_ENABLED` | `false` | Master switch for this feature (facts only works with no key). |
+| `GROQ_API_KEY` | empty | **Secret.** Set in the Render dashboard, never in the repo. Server-side only; sent only as a Bearer header to `GROQ_API_URL`. |
+| `GROQ_API_URL` | `https://api.groq.com/openai/v1` | In production it must be https and a `groq.com` host, so the key cannot be sent elsewhere. Redirects are refused. |
+| `GROQ_MODEL`, `GROQ_MODELS` | `llama-3.3-70b-versatile`, plus `llama-3.1-8b-instant` | Default model and allow-list. Model names are configuration: confirm them against Groq's current list before relying on them. |
+| `SUMMARY_MAX_CHARS`, `SUMMARY_MAX_OUTPUT_TOKENS`, `SUMMARY_TIMEOUT_S`, `SUMMARY_REVIEW_TTL_S` | `8000`, `700`, `30`, `3600` | Limits. |
+
+### Dashboard: Summarise note
+Sidebar entry **Summarise note** (roles with `summarise:llm`). Paste a note, choose refuse or mask for identifiers, choose whether to use the model and which
+model. The result shows warnings, the summary with a badge per cited fact (click one to jump to it), the **facts table with the source span of each fact**,
+dropped-sentence counts with reasons, the extraction limits and the review panel. The note and result are held in the page only (not in `localStorage`, not on the server);
+**Clear note and result** empties them.
+
+### Known limitations
+- **Validation is not clinical verification.** A sentence that passes has numbers, measurements and listed terms that match the note; it can still be incomplete, badly
+  worded or wrong in a way the rules cannot see. Clinician review is the control, and no accuracy claim is made: this phase has **no evaluation results** for summaries.
+- Extraction is a rule-based baseline: terms outside the lexicon and numbers the patterns do not recognise (for example "3 sachets per day") are not facts and cannot
+  be summarised. Negation and uncertainty are heuristics. The lexicon is not clinically reviewed. Chichewa, Tumbuka and Yao support is limited to listed words.
+- Because the summary is restricted to extracted facts, it is a faithful restatement of those facts, not a clinical summary of the whole note.
+- Validation reads sentences back with the same rule engine, so a term it does not know cannot be checked as an entity; such words appear as `unverified_words`.
+  The status check is strict about wording ("No X", "Suspected X", "History of X", "Family history of X"), so some correct sentences are dropped. That is the safe direction.
+- The identifier detector's limits (untitled names, addresses, dates of birth) apply: de-identify at the source. Only facts leave the laboratory for the model, which lowers
+  but does not remove the risk.
+- The review is an attestation recorded by counts; pending reviews and rate limits are in memory, per process, so a restart or expiry means generating the summary again.
+- Output screens are English-only pattern rules. Groq is a third-party service: confirm that sending de-identified facts there is permitted by your governance before
+  enabling it. Tests use a local fake Groq server; the real Groq API has not been called from this repository's test environment.
+
+### Tests
+`api/tests/test_llm_phase4.py`: extraction and statuses; that the model is shown only facts (no note text, no span, no injected instruction); sentence validation
+(invented and converted numbers, wrong measurement or unit, negation and history flips, unsupported terms, diagnosis and prescription, identifiers, malformed output);
+the endpoint against a fake Groq server (exact request, server-side key, masking, refusals send nothing, dropped sentences, facts-only mode, model allow-list);
+failures without leaks; production host rule; roles; shared per-key limit; the review step (attestations, once, same key, expiry); nothing stored anywhere in the database;
+counts-only audit; key secrecy; the dashboard page.

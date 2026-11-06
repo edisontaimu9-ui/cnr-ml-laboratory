@@ -74,6 +74,7 @@
     { id: "corpora", label: "NLP corpora", perm: "read:datasets", render: corporaPage },
     { id: "ask", label: "Ask CNR", perm: "use:llm", render: askPage },
     { id: "eval", label: "RAG evaluation", perm: "read:llm", render: evalPage },
+    { id: "summarise", label: "Summarise note", perm: "summarise:llm", render: summarisePage },
     { id: "predict", label: "Predict", perm: "predict:models", render: predictPage },
     { id: "registry", label: "Registry", perm: "read:models", render: registry },
     { id: "datasets", label: "Datasets", perm: "read:datasets", render: datasets },
@@ -1779,6 +1780,94 @@
       h("div", { class: "ask-actions" }, send, clear, h("span", { class: "muted" }, "Ctrl+Enter to send · " + c.limits.per_minute_per_key + " per minute")),
       h("p", { class: "muted" }, "This conversation is kept in this page only. It is not saved in your browser, and the laboratory stores no questions or answers. Follow-up questions send your last few turns to Chakudya so it can resolve what \"it\" refers to."),
     ];
+  }
+
+  // ---- Summarise note (LLM phase 4): de-identified clinical note -> facts (rule engine) -> optional model summary restricted to those facts ->
+  // clinician review. The note, the facts and the summary live in this page's memory only: not in browser storage, not on the server. All text is
+  // inserted as text, never as HTML. The summary can be copied only after the signed-in clinician has recorded a review.
+  const SUM_STATUS = { present: ["present", ""], negated: ["negated", "planned"], uncertain: ["uncertain", "watch"], historical: ["historical", "planned"], family: ["family history", "planned"] };
+  const SUM_REASON = { NUMBER: "a number not in the note", MEASUREMENT: "a measurement that does not match", ENTITY: "a term that is not a cited fact", NEGATION: "a status that does not match the note",
+    SCREEN: "a diagnosis or prescription about a person", IDENTIFIER: "an identifier", NO_FACT: "no valid fact cited", FORMAT: "wrong format" };
+
+  function sumFactsTable(facts) {
+    if (!facts.length) return h("p", null, "No facts were found in the note.");
+    return h("div", { class: "tablewrap" }, h("table", null,
+      h("thead", null, h("tr", null, ["ID", "Type", "Term", "Status", "Value", "From the note"].map((t) => h("th", { scope: "col" }, t)))),
+      h("tbody", null, facts.map((f) => {
+        const [lab, cls] = SUM_STATUS[f.status] || [f.status, "planned"];
+        return h("tr", { id: "fact-" + f.id }, h("td", null, f.id), h("td", null, f.kind), h("td", null, f.term),
+          h("td", null, h("span", { class: "badge " + cls }, lab)),
+          h("td", null, f.value != null ? f.value + " " + (f.unit || "") + (f.plausible === false ? " (outside plausible range)" : "") + (f.unit_guessed ? " (unit guessed)" : "") : "—"),
+          h("td", null, h("code", null, f.evidence)));
+      }))));
+  }
+
+  function sumSummary(sm) {
+    if (!sm) return h("p", { class: "muted" }, "No model summary was requested: only the extracted facts are shown.");
+    const rej = sm.rejected || { count: 0, reasons: {} };
+    const why = Object.entries(rej.reasons || {}).map(([k, v]) => v + " × " + (SUM_REASON[k] || k)).join("; ");
+    return h("div", null,
+      h("p", { class: "muted" }, "Written by " + sm.generated_by.model + " (Groq, open weights) from the facts only · prompt " + sm.generated_by.prompt + (sm.latency_ms ? " · " + sm.latency_ms + " ms" : "")),
+      sm.sentences.length ? h("ol", { class: "sum-sentences" }, sm.sentences.map((x) => h("li", null, x.text, " ",
+        x.facts.map((id) => h("a", { class: "badge", href: "#summarise", onclick: (ev) => { ev.preventDefault(); const t = document.getElementById("fact-" + id); if (t) { t.scrollIntoView({ block: "nearest" }); t.classList.add("hl"); setTimeout(() => t.classList.remove("hl"), 1500); } } }, id)),
+        (x.flags || []).map((fl) => h("span", { class: "badge watch", title: fl.detail }, "check: " + (fl.words || []).join(", ")))))) : h("p", { class: "error" }, "No sentence passed validation, so there is no summary."),
+      rej.count ? h("p", { class: "muted" }, rej.count + " sentence(s) written by the model were dropped: " + why + ".") : null,
+      sm.coverage && sm.coverage.not_mentioned.length ? h("p", { class: "muted" }, "Facts not mentioned in the summary: " + sm.coverage.not_mentioned.join(", ") + ".") : null);
+  }
+
+  function sumReview(d, state) {
+    const f = h("input", { type: "checkbox", id: "sum-f" }), n = h("input", { type: "checkbox", id: "sum-n" }), msg = h("p", { role: "status" });
+    const box = h("div", { class: "notice" });
+    const copyArea = h("textarea", { rows: "5", id: "sum-copy", "aria-label": "Reviewed summary" }); copyArea.hidden = true;
+    const copyBtn = h("button", { type: "button", disabled: true, onclick: async () => { try { await navigator.clipboard.writeText(copyArea.value); msg.textContent = "Copied."; } catch { msg.textContent = "Copy failed: select the text and copy it."; } } }, "Copy summary");
+    const send = (decision) => async () => {
+      msg.textContent = "";
+      try {
+        const r = await api("/v1/llm/summarise/review", { method: "POST", body: JSON.stringify({ request_id: d.request_id, decision, facts_checked: f.checked, numbers_checked: n.checked }) });
+        state.reviewed = decision; box.querySelectorAll("button,input").forEach((x) => { x.disabled = true; });
+        msg.textContent = r.detail;
+        if (decision !== "rejected" && d.summary && d.summary.text) { copyArea.value = d.summary.text; copyArea.readOnly = decision === "accepted"; copyArea.hidden = false; copyBtn.disabled = false; }
+      } catch (e) { msg.textContent = e.message; }
+    };
+    box.append(h("b", null, "Clinician review required"), h("p", null, "This is decision support, not a record. Check it against the note before any use. The summary can be copied only after you record a review."),
+      h("label", { class: "check" }, f, " " + d.review.checklist[0]), h("label", { class: "check" }, n, " " + d.review.checklist[1]), h("p", { class: "muted" }, d.review.checklist[2]),
+      h("div", { class: "ask-actions" }, h("button", { class: "primary", type: "button", onclick: send("accepted") }, "Accept as checked"),
+        h("button", { type: "button", onclick: send("accepted_with_edits") }, "Accept with my edits"), h("button", { type: "button", onclick: send("rejected") }, "Reject"),
+        h("span", { class: "muted" }, "Expires in " + Math.round(d.review.expires_in_s / 60) + " min")), msg, copyArea, copyBtn);
+    return box;
+  }
+
+  async function summarisePage() {
+    const st = await api("/v1/llm/summarise/status"), sm = st.summarisation;
+    const note = h("textarea", { id: "sum-note", rows: "9", maxlength: String(st.limits.max_note_chars), spellcheck: "false", placeholder: "Paste a de-identified clinical note. Remove names, phone numbers, record numbers and addresses first." });
+    const ids = h("select", { id: "sum-ids", "aria-label": "Identifiable text" }, h("option", { value: "reject" }, "Refuse notes that have identifiers"), h("option", { value: "mask" }, "Mask identifiers and continue"));
+    const useModel = h("input", { type: "checkbox", id: "sum-model", checked: sm.ready, disabled: !sm.ready });
+    const model = h("select", { id: "sum-model-name", "aria-label": "Model", disabled: !sm.ready }, (sm.models || []).map((m) => h("option", { value: m, selected: m === sm.default_model }, m)));
+    const err = h("p", { class: "error", role: "alert" }), out = h("div", { "aria-live": "polite" });
+    const run = h("button", { class: "primary", type: "button", onclick: async () => {
+      const text = note.value.trim();
+      if (!text) { err.textContent = "Paste a note first."; return; }
+      err.textContent = ""; run.disabled = true; out.replaceChildren(loader("Extracting facts" + (useModel.checked ? " and writing a summary…" : "…")));
+      try {
+        const d = await api("/v1/llm/summarise", { method: "POST", body: JSON.stringify({ note: text, identifiers: ids.value, use_model: useModel.checked && sm.ready, model: model.value || null }) });
+        const state = { reviewed: null };
+        out.replaceChildren(
+          h("h2", null, "Result"), (d.warnings || []).length ? h("ul", { class: "plain warn" }, d.warnings.map((w) => h("li", null, w))) : null,
+          d.masked_note ? h("details", null, h("summary", null, "Identifiers were masked: " + d.identifiers.found + " found"), h("p", { class: "snippet" }, d.masked_note)) : null,
+          h("h3", null, "Summary"), sumSummary(d.summary), h("h3", null, "Facts the summary is restricted to (" + d.extraction.facts.length + ")"), sumFactsTable(d.extraction.facts),
+          h("ul", { class: "plain muted" }, d.extraction.limits.map((l) => h("li", null, l))), sumReview(d, state));
+      } catch (e) { out.replaceChildren(h("div", { class: "msg bot refused", role: "alert" }, h("b", null, "Not processed. "), e.message)); }
+      finally { run.disabled = false; }
+    } }, "Extract and summarise");
+    const clear = h("button", { type: "button", onclick: () => { note.value = ""; out.replaceChildren(); err.textContent = ""; } }, "Clear note and result");
+    return [h("h1", null, "Summarise note"),
+      h("p", null, "Turn a de-identified clinical note into structured facts and, optionally, a short summary. The language model sees only the extracted facts, never the note, and every number and term in its sentences is checked against the note."),
+      h("div", { class: "notice" }, st.notice),
+      sm.ready ? null : h("div", { class: "notice" }, "The model summary is unavailable: " + (sm.problem || "not configured") + " Fact extraction still works."),
+      h("div", { class: "ask-controls" }, h("div", null, h("label", { for: "sum-model" }, h("span", null, "Write a summary with the model "), useModel), model), h("div", null, h("label", { for: "sum-ids" }, "Identifiable text"), ids)),
+      h("label", { for: "sum-note" }, "De-identified note"), note, err,
+      h("div", { class: "ask-actions" }, run, clear, h("span", { class: "muted" }, "Up to " + st.limits.max_note_chars + " characters")),
+      h("p", { class: "muted" }, "Nothing is stored: the note, the facts and the summary stay in this page and disappear when you leave it or clear it."), out];
   }
 
   // ---- RAG evaluation laboratory (LLM phase 3). Routes: eval (question sets), eval/set-<id>, eval/runs, eval/run-<id>, eval/result-<id>.
