@@ -111,3 +111,16 @@ button.loading::after{content:"";display:inline-block;width:.9em;height:.9em;mar
 .notebody{white-space:pre-wrap;overflow-wrap:anywhere}
 .noteform label{display:block;margin-top:.5rem}
 .noteform textarea{resize:vertical}
+
+.entview{line-height:2;padding:.8rem 1rem;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
+.legend{display:flex;flex-wrap:wrap;gap:.4rem}
+.ent{padding:.05rem .3rem;border-radius:4px;border-bottom:2px solid}
+.ent-FOOD{background:#e3f4e8;border-color:#2e8b57}
+.ent-CONDITION{background:#fde8e4;border-color:#c0392b}
+.ent-SYMPTOM{background:#fff1da;border-color:#c98a1b}
+.ent-INTERVENTION{background:#ece8f8;border-color:#6b4fb3}
+.ent-NUTRIENT{background:#dff3f1;border-color:#2a9d8f}
+.ent-POPULATION{background:#eceff2;border-color:#7a8b99}
+.ent-MEASUREMENT{background:#e1eef8;border-color:#0e5a73}
+.ent-PHI{background:#222;color:#fff;border-color:#000}
+.ent.neg,.neg{text-decoration:line-through;opacity:.75}

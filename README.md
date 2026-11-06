@@ -209,12 +209,24 @@ It exists to turn nutrition data into usable intelligence for Malawi: research, 
 - **Who:** viewers, registry owners, data scientists, clinical reviewers and admins can read; data scientists, clinical reviewers and admins can write. The CNR `service` key cannot see notes.
 - **Dashboard:** a **Notes** page (search, filter by type or subject, show archived) and a **Lab notes** panel on each dataset, experiment, exploration, hotspot analysis and model version page.
 
+## NLP laboratory (text to structured nutrition information)
+- **Purpose:** extract structured nutrition information from clinical notes, reports, research text and dietary records, in English, Chichewa or both.
+- **What it finds:** named entities (`FOOD` with food group, `CONDITION`, `SYMPTOM`, `INTERVENTION`, `NUTRIENT`, `POPULATION`), measurements normalised to one unit with a type (weight, height, MUAC, BMI, haemoglobin, HbA1c, glucose, albumin, z-scores, age, energy, portions linked to the food, durations), and identifiers (`PHI`). Each condition or symptom carries `negated`, `uncertain`, `historical` and `family` flags ("no fever", "suspected anaemia", "family history of diabetes").
+- **Also returns:** the language of the text and of each sentence (`en`, `ny`, `mixed`, with code-switching), a structured record (present, negated and uncertain conditions and symptoms, foods and food groups, interventions, measurements), a document type (clinical note, lab report, dietary record, research text, or unclear) and nutrition topics with the entities that support them. Document type and topics are cue counts, not probabilities.
+- **Extraction only:** it reports what the text says. It makes no diagnosis and assigns no nutrition status. Implausible values and guessed units are flagged, not hidden.
+- **Privacy:** text is processed in memory and never stored. The audit log (`nlp.analyze`) holds counts only. Emails, phone numbers, ID numbers, record numbers and titled names are detected; they are redacted in the response and masked in `masked_text`, or the whole request is refused with `identifiers: "reject"`. Personal names without a title cannot be detected reliably, so identifiable notes must not be submitted.
+- **Engine:** a transparent rule-based baseline (`nlp-rules-1`): terminology lists plus patterns, in `app/nlp_lexicon.py` and `app/nlp_lab.py`. No model is trained and nothing is sent to an external service. The terminology lists were written by the developers and **none has been clinically reviewed**; Chichewa verbs change form, so only the listed forms are found. A term that is not listed is not found.
+- **Benchmark:** `GET /v1/nlp/benchmark` runs the engine on a small set of synthetic sentences and reports precision, recall and F1 per label. It guards against regressions only; it does not measure accuracy on real notes.
+- **API:** `POST /v1/nlp/analyze` (up to 20 texts of 8000 characters, per-key rate limit), `GET /v1/nlp/info`, `GET /v1/nlp/lexicon` (filter by `label`, `lang`, `q`), `GET /v1/nlp/benchmark`. Data scientists, clinical reviewers and admins can analyse text; every role except `service` can read the terminology and benchmark.
+- **Dashboard:** an **NLP** page with sample texts, a highlighted view of the entities (negated findings struck through), the structured record, the regression benchmark and a browser for the terminology lists.
+- **Next:** a trained entity model and a trainable text classifier need real, de-identified, expert-annotated text. They would use the same dataset, experiment and registry path as the other models.
+
 ## Roles
 | Role | Can |
 |---|---|
-| viewer | read catalogue, models, experiments, explorations, hotspot analyses, datasets and notes (cannot call predictions) |
-| data_scientist | viewer + create datasets, upload versions, preview rows, create experiments, explorations and hotspot analyses, register and submit model versions, write notes |
-| clinical_reviewer | viewer + approve or reject models in review, read audit log, write notes |
+| viewer | read catalogue, models, experiments, explorations, hotspot analyses, datasets, notes and the NLP terminology and benchmark (cannot call predictions or analyse text) |
+| data_scientist | viewer + create datasets, upload versions, preview rows, create experiments, explorations and hotspot analyses, register and submit model versions, write notes, analyse text (NLP) |
+| clinical_reviewer | viewer + approve or reject models in review, read audit log, write notes, analyse text (NLP) |
 | registry_owner | viewer + approve or reject **food-name matchers** in review (nothing else; cannot deploy) |
 | service | read catalogue, call predictions and CNR assessments only (machine key for CNR) |
 | admin | everything, including keys, deploy, roll back, withdraw and the CNR integration status (still cannot review their own registrations) |

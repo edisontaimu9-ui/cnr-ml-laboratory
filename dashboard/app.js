@@ -63,6 +63,7 @@
     { id: "explorations", label: "Exploration", perm: "read:explorations", render: explorations },
     { id: "matching", label: "Matching", perm: "write:experiments", render: matchingPage },
     { id: "hotspots", label: "Hotspots", perm: "read:hotspots", render: hotspots },
+    { id: "nlp", label: "NLP", perm: "read:nlp", render: nlpPage },
     { id: "predict", label: "Predict", perm: "predict:models", render: predictPage },
     { id: "registry", label: "Registry", perm: "read:models", render: registry },
     { id: "datasets", label: "Datasets", perm: "read:datasets", render: datasets },
@@ -104,6 +105,8 @@
         cap("Model evaluation.", "Hold-out and cross-validation, bootstrap ranges, per-class results and leakage guards, to judge how reliable a model is and how well it generalises."),
         cap("Surveillance.", "District hotspots and prevalence trends from aggregated counts, never from individual children."),
         cap("Model management.", "Experiments are recorded and trained models preserved. The registry keeps versions with fixed seeds and hashes for reproducibility, and every deployment passes clinical review."),
+        cap("Text analysis (NLP).", "Structured nutrition information from clinical notes, reports, research text and dietary records in English and Chichewa: foods, conditions, symptoms, interventions and measurements, with negation and identifier masking. Rule-based, not a trained model."),
+        cap("Laboratory memory.", "Decisions, findings, lessons and warnings recorded next to the datasets, experiments and models they are about, kept with their history."),
         cap("CNR integration.", "A pathway for validated models to be served to CNR services and APIs, and an opt-in feed of de-identified data from CNR.")),
       h("h2", null, "Primary objective"),
       h("p", null, "To establish a research-oriented machine learning environment that supports nutrition scientists, researchers and developers in building, testing and evaluating data-driven solutions for Malawi's nutrition challenges."),
@@ -1267,6 +1270,95 @@
     refreshTable().catch((e) => holder.replaceChildren(h("div", { class: "notice" }, e.message)));
     return [h("h1", null, "Access"), h("p", null, "Each person or service gets its own key and role. Revoke a key as soon as it is no longer needed."),
       h("div", { class: "inline" }, h("div", null, h("label", { for: "kn" }, "Key name"), name), h("div", null, h("label", { for: "kr" }, "Role"), role), create), err, out, holder];
+  }
+
+  // ---------- NLP laboratory: structured nutrition information from free text (English and Chichewa). Text is never stored. ----------
+  const NLP_SAMPLES = [
+    ["Clinical note", "A 14 month old child presented with severe acute malnutrition. MUAC 10.8 cm, weight 6.2 kg and bilateral pitting oedema. No fever, denies vomiting. Hb 7.9 g/dL. Started F-75 and RUTF. Plan: nutrition counselling for the mother."],
+    ["English and Chichewa", "The child was admitted with swelling of the feet. Mwana sakudya nsima, amadya phala ndi mkaka wa m'mawere, akutsegula m'mimba kwa masabata awiri. Palibe kusanza. Mother says he has had no fever."],
+    ["Dietary record", "24-hour recall: breakfast was 2 cups of porridge with sugar and 1 egg. Lunch: 3 plates of nsima with beans and pumpkin leaves. Supper: nsima with usipa. Drank tea and water. No milk."],
+  ];
+  const ENT_NAMES = { FOOD: "Food", CONDITION: "Condition", SYMPTOM: "Symptom", INTERVENTION: "Intervention", NUTRIENT: "Nutrient", POPULATION: "Patient group", MEASUREMENT: "Measurement", PHI: "Identifier" };
+  const LANG_NAMES = { en: "English", ny: "Chichewa", mixed: "English + Chichewa", unknown: "Not enough words to tell" };
+  const pct1 = (x) => (x == null ? "—" : (x * 100).toFixed(0) + "%");
+
+  function highlight(text, ents) {
+    const nodes = []; let pos = 0;
+    for (const e of ents) {
+      if (e.start < pos) continue;
+      nodes.push(text.slice(pos, e.start));
+      const a = e.attributes || {}, flags = ["negated", "uncertain", "historical", "family"].filter((k) => a[k]);
+      const tip = ENT_NAMES[e.label] + ": " + e.norm + (e.value != null ? " = " + e.value + " " + (e.unit || "") : "") + (flags.length ? " (" + flags.join(", ") + ")" : "");
+      nodes.push(h("span", { class: "ent ent-" + e.label + (a.negated ? " neg" : ""), title: tip }, e.label === "PHI" ? "[" + e.norm + "]" : text.slice(e.start, e.end)));
+      pos = e.end;
+    }
+    nodes.push(text.slice(pos));
+    return h("p", { class: "notebody entview" }, nodes);
+  }
+
+  function termList(title, rows, cls) {
+    return rows.length ? h("p", null, h("b", null, title + ": "), rows.map((r, i) => [i ? ", " : "", h("span", { class: cls || "" }, r.term + (r.count > 1 ? " ×" + r.count : ""))])) : null;
+  }
+
+  function nlpResult(text, r) {
+    const rec = r.record, cl = r.classification, lang = r.language;
+    const out = [];
+    if (r.identifiers.found) out.push(h("div", { class: "notice" }, h("b", null, "Identifiers found (" + Object.entries(r.identifiers.types).map(([k, n]) => k.toLowerCase() + " ×" + n).join(", ") + "). "), "They are masked below and were not stored. Remove identifiers at the source; do not process identifiable notes."));
+    out.push(h("div", { class: "stats" },
+      h("div", { class: "stat" }, h("b", null, LANG_NAMES[lang.overall]), h("span", null, "Language" + (lang.code_switching ? " · switches between languages" : ""))),
+      h("div", { class: "stat" }, h("b", null, cl.document_type.label.replace("_", " ")), h("span", null, "Looks like (by cue words)")),
+      h("div", { class: "stat" }, h("b", null, r.entities.filter((e) => e.label !== "PHI").length), h("span", null, "Things found"))));
+    out.push(h("h2", null, "Text with entities"), h("p", { class: "legend" }, Object.keys(ENT_NAMES).map((k) => h("span", { class: "ent ent-" + k }, ENT_NAMES[k]))),
+      highlight(text, r.entities), h("p", { class: "muted" }, "Struck-through items are negated (for example “no fever”). Hover an item for its normalised form."));
+    out.push(h("h2", null, "Structured record"));
+    const rows = Object.entries(rec.measurements).flatMap(([k, list]) => list.map((m) => [k.replace("_", " "), m.value + (m.unit ? " " + m.unit : ""), m.text, [m.food ? "of " + m.food : null, m.plausible === false ? "check: implausible" : null].filter(Boolean).join("; ")]));
+    out.push(termList("Conditions", rec.conditions.present), termList("Conditions, negated", rec.conditions.negated, "neg"), termList("Conditions, uncertain", rec.conditions.uncertain),
+      termList("Symptoms and signs", rec.symptoms.present), termList("Symptoms, negated", rec.symptoms.negated, "neg"), termList("Symptoms, uncertain", rec.symptoms.uncertain),
+      termList("Foods", rec.foods), termList("Food groups", rec.food_groups), termList("Interventions", rec.interventions), termList("Nutrients", rec.nutrients), termList("Patient groups", rec.populations),
+      rows.length ? table(["Measurement", "Value", "Text", "Note"], rows) : null);
+    if (cl.topics.length) out.push(h("h2", null, "Topics"), h("ul", { class: "plain" }, cl.topics.map((t) => h("li", null, h("b", null, t.topic.replace(/_/g, " ") + " "), h("span", { class: "badge" }, t.strength), " " + t.evidence.join(", ")))));
+    out.push(h("p", { class: "muted" }, "Topics and document type come from cue words and found entities. They are not probabilities and not a diagnosis."));
+    r.warnings.forEach((w) => out.push(h("div", { class: "notice" }, w)));
+    return out;
+  }
+
+  async function nlpPage() {
+    const info = await api("/v1/nlp/info");
+    const result = h("div"), bench = h("div"), lexBox = h("div");
+    const area = h("textarea", { id: "nlp-text", rows: "7", maxlength: String(info.limits.chars_per_text), spellcheck: "false", placeholder: "Paste de-identified text: a clinical note, report, abstract or dietary record, in English, Chichewa or both." });
+    const mode = h("select", { id: "nlp-mode" }, h("option", { value: "mask" }, "Mask identifiers and continue"), h("option", { value: "reject" }, "Refuse text that has identifiers"));
+    const err = h("p", { class: "error", role: "alert" });
+    const run = h("button", { class: "primary", onclick: async () => {
+      err.textContent = ""; const text = area.value;
+      if (!text.trim()) { err.textContent = "Paste some text first."; return; }
+      try { const d = await api("/v1/nlp/analyze", { method: "POST", body: JSON.stringify({ texts: [text], identifiers: mode.value }) }); result.replaceChildren(...nlpResult(text, d.results[0]).flat().filter(Boolean)); }
+      catch (e) { err.textContent = e.message; result.replaceChildren(); }
+    } }, "Analyse text");
+    const samples = h("p", null, "Try a sample: ", NLP_SAMPLES.map(([n, t]) => [h("button", { class: "link", onclick: () => { area.value = t; } }, n), " "]));
+    const bBtn = h("button", { onclick: async () => {
+      try { const b = await api("/v1/nlp/benchmark");
+        bench.replaceChildren(h("div", { class: "notice" }, b.notice), h("div", { class: "stats" }, h("div", { class: "stat" }, h("b", null, pct1(b.overall.f1)), h("span", null, "F1 on " + b.sentences + " synthetic sentences")), h("div", { class: "stat" }, h("b", null, pct1(b.context_flag_accuracy)), h("span", null, "Negation, uncertainty, family flags"))),
+          table(["Label", "Expected", "Found", "Precision", "Recall", "F1"], Object.entries(b.per_label).map(([k, v]) => [ENT_NAMES[k] || k, v.expected, v.found, pct1(v.precision), pct1(v.recall), pct1(v.f1)])),
+          b.missed.length || b.extra.length ? table(["Sentence", "Problem", "Label", "Text"], [...b.missed.map((m) => [m.sentence, "missed", m.label, m.text]), ...b.extra.map((m) => [m.sentence, "extra", m.label, m.text])]) : h("p", { class: "muted" }, "No misses and no extras on this set."));
+      } catch (e) { bench.replaceChildren(h("div", { class: "notice" }, e.message)); } } }, "Run regression benchmark");
+    const lq = h("input", { id: "lex-q", type: "search", placeholder: "Search terms", maxlength: "60", autocomplete: "off" });
+    const ll = h("select", { id: "lex-l" }, h("option", { value: "" }, "All types"), Object.keys(ENT_NAMES).filter((k) => k !== "MEASUREMENT" && k !== "PHI").map((k) => h("option", { value: k }, ENT_NAMES[k])));
+    const lg = h("select", { id: "lex-g" }, h("option", { value: "" }, "English and Chichewa"), h("option", { value: "en" }, "English"), h("option", { value: "ny" }, "Chichewa"));
+    const loadLex = async () => {
+      const p = new URLSearchParams({ limit: "500" }); if (lq.value.trim()) p.set("q", lq.value.trim()); if (ll.value) p.set("label", ll.value); if (lg.value) p.set("lang", lg.value);
+      try { const d = await api("/v1/nlp/lexicon?" + p); lexBox.replaceChildren(h("p", { class: "muted" }, d.total + " terms" + (d.total > d.terms.length ? " (first " + d.terms.length + " shown)" : "") + ". None has been clinically reviewed yet."), table(["Term", "Means", "Type", "Group", "Language"], d.terms.map((t) => [t.term, t.norm, ENT_NAMES[t.label], t.group, t.lang === "ny" ? "Chichewa" : t.lang === "en" ? "English" : "Both"]))); }
+      catch (e) { lexBox.replaceChildren(h("div", { class: "notice" }, e.message)); }
+    };
+    [ll, lg].forEach((el) => el.addEventListener("change", loadLex)); lq.addEventListener("keydown", (e) => { if (e.key === "Enter") loadLex(); });
+    return [h("h1", null, "NLP laboratory"),
+      h("p", null, "Extracts structured nutrition information from clinical notes, reports, research text and dietary records, in English and Chichewa: named entities (foods, conditions, symptoms, interventions, nutrients, patient groups), measurements with units, negation and uncertainty, language, and a document type."),
+      h("div", { class: "notice" }, info.notice),
+      h("div", { class: "stats" }, h("div", { class: "stat" }, h("b", null, info.lexicon.terms), h("span", null, "terms in the lists")), h("div", { class: "stat" }, h("b", null, info.lexicon.clinically_reviewed), h("span", null, "clinically reviewed")), h("div", { class: "stat" }, h("b", null, info.kind), h("span", null, "engine " + info.engine))),
+      can("run:nlp") ? [h("h2", null, "Analyse text"), samples, h("label", { for: "nlp-text" }, "Text"), area, h("label", { for: "nlp-mode" }, "If identifiers are found"), mode, h("p", null, run), err, result]
+        : h("div", { class: "notice" }, "Your role can read the terminology and benchmark but cannot analyse text."),
+      h("h2", null, "Regression benchmark"), h("p", { class: "muted" }, "Checks the engine against a few synthetic sentences. It protects against regressions; it says nothing about accuracy on real notes."), h("p", null, bBtn), bench,
+      h("details", { class: "card", ontoggle: (ev) => { if (ev.target.open && !lexBox.childNodes.length) loadLex(); } }, h("summary", null, "Terminology lists"),
+        h("div", { class: "inline" }, h("div", null, h("label", { for: "lex-q" }, "Search"), lq), h("div", null, h("label", { for: "lex-l" }, "Type"), ll), h("div", null, h("label", { for: "lex-g" }, "Language"), lg)), lexBox)];
   }
 
   // ---------- Notes: laboratory memory. People record decisions, findings, lessons and warnings next to the thing they are about. ----------
