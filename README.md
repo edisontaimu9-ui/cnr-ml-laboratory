@@ -223,11 +223,12 @@ It exists to turn nutrition data into usable intelligence for Malawi: research, 
 - **Next:** a trained entity model and a trainable text classifier need real, de-identified, expert-annotated text. They would use the same dataset, experiment and registry path as the other models.
 
 ### Annotated text corpora (training data for the NLP lab, stage 1)
-- **Upload and validate only.** Training comes in a later stage. `POST /v1/nlp/corpora/inspect` checks a JSON Lines file and stores nothing; `POST /v1/nlp/corpora` (new corpus) and `POST /v1/nlp/corpora/{id}/versions` store a version. `GET /v1/nlp/corpora/format` shows the format.
-- **Format:** one document per line, `{"text": ..., "lang": "en|ny|tum|yao|mixed", "entities": [{"start", "end", "label"}]}`. Offsets are characters, end exclusive, entities may not overlap, and `PHI` is not a training label.
-- **Safety:** a file with identifiers (titled names, phones, emails, record or ID numbers) or any invalid line is refused whole; problems are reported by line number and identifier type, never by text. Only `text`, `lang` and `entities` are kept, exact duplicates are removed, and an approval reference is required. The audit log keeps counts only.
+- **Upload and validate only.** Training comes in a later stage. `POST /v1/nlp/corpora/inspect` checks a file and stores nothing; `POST /v1/nlp/corpora` (new corpus) and `POST /v1/nlp/corpora/{id}/versions` store a version. `GET /v1/nlp/corpora/format` describes every format.
+- **Formats:** JSONL and JSON (exchange), CSV (manual annotation), BIO / IOB2 and CoNLL (token tagging), spaCy DocBin `.spacy` (spaCy training) and BRAT standoff (a ZIP of `.txt` and `.ann` pairs, for expert annotation). Set `format`, or leave `auto` to go by the file extension. Whatever the input, it is converted to one canonical form: `{"text", "lang": "en|ny|tum|yao|mixed", "entities": [{"start", "end", "label"}]}` with character offsets (end exclusive), and stored as JSON Lines.
+- **Options:** `lang` gives the language to documents that carry none (BIO, CoNLL, DocBin and BRAT files usually do not); `label_map` renames labels from another dataset, for example `{"FOOD_ITEM": "FOOD", "PER": ""}` (a label mapped to `""` is dropped).
+- **Safety:** a file with identifiers (titled names, phones, emails, record or ID numbers) or any invalid record is refused whole; problems are reported by location (line, row, file) and identifier type, never by text. Only `text`, `lang` and `entities` are kept, exact duplicates are removed, `PHI` is not a training label, and an approval reference is required. The audit log keeps counts only.
 - **Report:** documents and entities per language and label, with warnings when a language has under 100 documents or a label under 50 examples.
-- Needs the `write:datasets` permission to upload and `read:datasets` to list.
+- Needs the `write:datasets` permission to upload and `read:datasets` to list. Reading `.spacy` files needs spaCy, which is in `requirements.txt`.
 
 ## Roles
 | Role | Can |

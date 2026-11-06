@@ -73,7 +73,7 @@ def test_bad_lines_are_reported_with_line_numbers(bad, expect):
 
 def test_identifiers_refuse_the_whole_file_without_echoing_them():
     r = nlp_corpus.parse(jsonl(GOOD[0], doc("Call Mr Banda on 0999123456 about the child.", "en", ("child", "POPULATION"))))
-    assert not r["valid"] and r["identifier_lines"] == [2] and set(r["identifier_types"]) >= {"PHONE", "NAME"}
+    assert not r["valid"] and r["identifier_lines"] == ["line 2"] and set(r["identifier_types"]) >= {"PHONE", "NAME"}
     assert "Banda" not in json.dumps(r) and "0999123456" not in json.dumps(r)
 
 
@@ -92,9 +92,10 @@ def test_not_utf8_and_empty_files():
 
 
 def test_inspect_stores_nothing_and_reports(client):
+    before = client.get("/v1/nlp/corpora", headers=ADMIN).json()
     r = upload(client, jsonl(*GOOD), path="/v1/nlp/corpora/inspect")
     assert r.status_code == 200 and r.json()["valid"] is True and r.json()["report"]["documents"] == 3
-    assert client.get("/v1/nlp/corpora", headers=ADMIN).json() == []
+    assert client.get("/v1/nlp/corpora", headers=ADMIN).json() == before
     bad = upload(client, jsonl(GOOD[0], "oops"), path="/v1/nlp/corpora/inspect")
     assert bad.status_code == 200 and bad.json()["valid"] is False and bad.json()["errors"][0].startswith("line 2:")
 
@@ -121,7 +122,7 @@ def test_create_version_and_read_back(client):
 def test_invalid_file_is_refused_and_nothing_is_created(client):
     before = len(client.get("/v1/nlp/corpora", headers=ADMIN).json())
     r = upload(client, jsonl(GOOD[0], doc("Dr Phiri 0888123456 saw the child.", "en", ("child", "POPULATION"))), name="Leaky", approval_ref=REF)
-    assert r.status_code == 422 and r.json()["detail"]["identifier_lines"] == [2]
+    assert r.status_code == 422 and r.json()["detail"]["identifier_lines"] == ["line 2"]
     assert "Phiri" not in r.text and "0888123456" not in r.text
     assert upload(client, jsonl("nope"), name="Broken", approval_ref=REF).status_code == 422
     assert len(client.get("/v1/nlp/corpora", headers=ADMIN).json()) == before
