@@ -71,6 +71,14 @@ A hotspot analysis answers "where is prevalence higher than expected, and how is
 - **Out of scope.** No bulk transfer of CNR records into the lab and no calls from the lab into CNR's data endpoints; that would need a separate de-identification and approval design. Treat these as open decisions with the data owner.
 - **Known limits.** The rate limit is per process (single instance). There is no per-caller allow-list of IP addresses; the service key is the only credential, so keep it in CNR's secret store and rotate it by revoking and re-creating it under Access.
 
+## LLM intelligence (phase 1: contract and safety rules)
+The laboratory is adding language-model features in six approved phases (see [LLM_INTELLIGENCE.md](LLM_INTELLIGENCE.md)). Phase 1 adds no model and sends no text anywhere; it fixes the rules every later feature must pass through.
+- **One gate.** `routers/llm.gate` (authentication, `use:llm`, per-key rate limit) and `llm_policy` (decision-support boundary, identifier gate) are reused by every LLM endpoint. `POST /v1/llm/precheck` runs exactly that gate.
+- **One door to Chakudya.** `llm_gateway.py` is the only module that reads the consumer key. The address and key come from the environment; redirects are refused; only `/rag/ask` and `/rag/retrieve` are allowed. A test fails if any other module reads the key or the dashboard mentions it.
+- **Identifiers.** The NLP detector decides what may leave. It is incomplete by nature (no untitled names, addresses or dates of birth), so the contract states that and de-identification at the source stays mandatory.
+- **Audit.** `llm_audit.py` is an allow-list of counts and fixed codes; free text cannot be stored by mistake.
+- **Not covered yet.** No retrieval, no generation, no evaluation, no summarisation and no model registry entries for language models; those are phases 2 to 6.
+
 ## Dataset ingestion
 1. **Inspect** (`/v1/datasets/inspect`): the file is parsed in memory, typed, scanned for identifiers and profiled. Nothing is stored. Values of flagged columns are never returned.
 2. **Create version** (`/v1/datasets/{id}/versions`): the file is parsed again, the reviewed plan is applied, and only the resulting table is stored. The raw upload is discarded. Re-uploading an identical file is rejected.

@@ -326,8 +326,24 @@ def _mask(text: str, phi: list[dict]) -> str:
     return "".join(out)
 
 
+def _fold(text: str) -> str:
+    """Typographic quotes, minus signs and dashes to ASCII. Same length, so offsets stay valid."""
+    return text.replace("’", "'").replace("‘", "'").replace("−", "-").replace("–", "-")
+
+
+def screen_identifiers(text: str) -> list[dict]:
+    """Identifiers only (e-mail, phone, record and ID numbers, titled names), without the rest of the analysis. It is the same
+    detector, folding and overlap rule that `analyze` uses, so it finds exactly what `analyze` reports as PHI. Used by the LLM
+    safety gate to decide whether text may leave the laboratory. Offsets refer to `text`."""
+    return _resolve(_identifiers(_fold(text)))
+
+
+def mask_identifiers(text: str, phi: list[dict]) -> str:
+    return _mask(text, phi)
+
+
 def analyze(text: str) -> dict:
-    t = text.replace("’", "'").replace("‘", "'").replace("−", "-").replace("–", "-")   # same length, so offsets stay valid
+    t = _fold(text)
     cands = _identifiers(t) + _measurements(t)
     for m in _MATCHERS:
         for s, e, item in m.find(t):

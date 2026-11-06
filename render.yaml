@@ -38,6 +38,15 @@ services:
       # Record-level (de-identified) training rows from CNR: opt in deliberately.
       - key: TRAINING_SYNC_ENABLED
         value: "false"
+      # LLM intelligence (phase 1). Server-side only: the consumer key is a secret entered in the Render dashboard.
+      - key: LLM_ENABLED
+        value: "false"
+      - key: CHAKUDYA_API_URL
+        value: https://api.chakudya.xyz
+      - key: CHAKUDYA_CONSUMER_KEY
+        sync: false
+      - key: LLM_IDENTIFIER_POLICY
+        value: reject
   - type: web
     name: cnr-ml-lab-dashboard
     runtime: static

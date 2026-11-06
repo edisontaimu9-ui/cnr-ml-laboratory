@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -39,7 +40,22 @@ class Settings(BaseSettings):
     training_sync_months: int = 12
     training_sync_approval_ref: str = "CNR de-identified training export (automatic)"
     training_fetch_max_mb: int = 20
-    service_version: str = "0.8.0"
+    # LLM intelligence, phase 1 (contract and safety rules). The Chakudya address and consumer key live ONLY here, on the server:
+    # they are never sent to the dashboard, returned by an endpoint, logged or audited. The key is a SecretStr so that even
+    # printing the settings object shows nothing. Off until LLM_ENABLED=true AND the key is set.
+    llm_enabled: bool = False
+    chakudya_api_url: str = ""                  # empty -> CNR_API_BASE_URL
+    chakudya_consumer_key: SecretStr = SecretStr("")
+    llm_timeout_s: float = 30.0
+    llm_max_response_kb: int = 256
+    # Text may leave the lab only after the NLP identifier detector has run. "reject" refuses identifiable text (default);
+    # "mask" replaces what the detector finds with [EMAIL], [PHONE]... A request may choose either, never "off".
+    llm_identifier_policy: str = "reject"
+    llm_max_text_chars: int = 4000
+    # Per API key (not per address). In-memory, so per process, like the other limiters.
+    llm_rate_limit_per_min: int = 20
+    llm_rate_limit_per_hour: int = 300
+    service_version: str = "0.9.0"
     # Dataset ingestion
     dataset_storage_dir: str = "./data/datasets"
     pseudonym_key: str = ""          # >= 32 chars; enables the "pseudonymise" action

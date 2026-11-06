@@ -42,3 +42,11 @@ class SlidingWindow:
         with self._lock:
             q = self._hits.get(key)
             return max(1, int(self.window - (time.monotonic() - q[0])) + 1) if q else 1
+
+    def remaining(self, key: str) -> int:
+        with self._lock:
+            q = self._hits.get(key)
+            if not q:
+                return self.limit
+            self._trim(q, time.monotonic())
+            return max(0, self.limit - len(q))

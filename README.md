@@ -234,12 +234,20 @@ It exists to turn nutrition data into usable intelligence for Malawi: research, 
 - **Report:** documents and entities per language and label, with warnings when a language has under 100 documents or a label under 50 examples.
 - Needs the `write:datasets` permission to upload and `read:datasets` to list. Reading `.spacy` files needs spaCy, which is in `requirements.txt`.
 
+## LLM intelligence (phase 1 of 6: contract and safety rules)
+- **Roadmap:** six sequential phases (Ask CNR, RAG evaluation, clinical summarisation, open-weight model comparison, gated fine-tuning), each approved before the next begins. See [docs/LLM_INTELLIGENCE.md](docs/LLM_INTELLIGENCE.md). Phase 1 adds no model and sends no text to any service.
+- **Never diagnoses.** Questions that ask for a diagnosis, or a prescription or dose for a patient, are refused; answers that state a diagnosis or prescription about a person are blocked. Criteria, guideline text and documented findings stay allowed. English patterns only so far.
+- **Nothing identifiable leaves the lab.** Text passes the NLP identifier detector first and is refused (default) or masked. The detector misses untitled names, addresses and dates of birth, so de-identification at the source is still required.
+- **Chakudya address and consumer key are server-side only.** Environment variables (`CHAKUDYA_API_URL`, `CHAKUDYA_CONSUMER_KEY`), one module reads the key, it is never returned, logged or audited, redirects are refused, and only the two RAG routes can be called.
+- **Audit logs hold counts and fixed codes only**, never text. **Limits are per API key** (default 20 per minute, 300 per hour).
+- **Endpoints:** `GET /v1/llm/contract`, `GET /v1/llm/status` (admin), `POST /v1/llm/precheck` (data scientist, clinical reviewer, admin). New permissions: `read:llm` (everyone but `service`) and `use:llm`.
+
 ## Roles
 | Role | Can |
 |---|---|
 | viewer | read catalogue, models, experiments, explorations, hotspot analyses, datasets, notes and the NLP terminology and benchmark (cannot call predictions or analyse text) |
-| data_scientist | viewer + create datasets, upload versions, preview rows, create experiments, explorations and hotspot analyses, register and submit model versions, write notes, analyse text (NLP) |
-| clinical_reviewer | viewer + approve or reject models in review, read audit log, write notes, analyse text (NLP) |
+| data_scientist | viewer + create datasets, upload versions, preview rows, create experiments, explorations and hotspot analyses, register and submit model versions, write notes, analyse text (NLP), use the LLM safety gate |
+| clinical_reviewer | viewer + approve or reject models in review, read audit log, write notes, analyse text (NLP), use the LLM safety gate |
 | registry_owner | viewer + approve or reject **food-name matchers** in review (nothing else; cannot deploy) |
 | service | read catalogue, call predictions and CNR assessments only (machine key for CNR) |
 | admin | everything, including keys, deploy, roll back, withdraw and the CNR integration status (still cannot review their own registrations) |
