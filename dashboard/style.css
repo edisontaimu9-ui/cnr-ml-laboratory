@@ -124,3 +124,6 @@ button.loading::after{content:"";display:inline-block;width:.9em;height:.9em;mar
 .ent-MEASUREMENT{background:#e1eef8;border-color:#0e5a73}
 .ent-PHI{background:#222;color:#fff;border-color:#000}
 .ent.neg,.neg{text-decoration:line-through;opacity:.75}
+.tabs{display:flex;gap:.4rem;flex-wrap:wrap;margin:.6rem 0 1.1rem}
+.tabs button{border-radius:99px;padding:.35rem .95rem}
+.tabs button[aria-current="page"]{background:var(--lake);border-color:var(--lake);color:#fff;font-weight:600}

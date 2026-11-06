@@ -25,7 +25,7 @@ It exists to turn nutrition data into usable intelligence for Malawi: research, 
 
 ## Platform
 - **ML API** (`api/`, FastAPI): API-key authentication, five roles (plus a machine key), audit log, full metadata schema (datasets, versions, experiments, model versions), a catalogue of the nineteen planned model targets, `/health`.
-- **Dashboard** (`dashboard/`, static HTML/JS, no build step): installable as an app (PWA), with overview, models, experiments, exploration, hotspots, datasets, registry, prediction, CNR integration, audit log and key management. Pages show honest empty states until there is data.
+- **Dashboard** (`dashboard/`, static HTML/JS, no build step): installable as an app (PWA), with overview, models, experiments, exploration, hotspots, NLP, NLP corpora and training, datasets, registry, prediction, CNR integration, audit log and key management. Pages show honest empty states until there is data.
 - **Deployment**: Dockerfiles, `docker-compose.yml`, `render.yaml`, CI, Supabase RLS script.
 - It does not touch CNR's production API. The two will talk only through authenticated endpoints (see CNR integration below).
 
@@ -220,6 +220,7 @@ It exists to turn nutrition data into usable intelligence for Malawi: research, 
 - **Benchmark:** `GET /v1/nlp/benchmark` runs the engine on a small set of synthetic sentences and reports precision, recall and F1 per label. It guards against regressions only; it does not measure accuracy on real notes.
 - **API:** `POST /v1/nlp/analyze` (up to 20 texts of 8000 characters, per-key rate limit), `GET /v1/nlp/info`, `GET /v1/nlp/lexicon` (filter by `label`, `lang`, `q`), `GET /v1/nlp/benchmark`. Data scientists, clinical reviewers and admins can analyse text; every role except `service` can read the terminology and benchmark.
 - **Dashboard:** an **NLP** page with sample texts, a highlighted view of the entities (negated findings struck through), the structured record, the regression benchmark and a browser for the terminology lists.
+- **Dashboard (corpora, training and models):** an **NLP corpora** page with three tabs. *Corpora*: list, check a file before storing it (report by language and label, problems listed by location), store a corpus or a new version, download the annotation template, and make a pre-labelled CSV from plain sentences. *Training runs*: start a run from a corpus (trial option shown with the thresholds), and read the results by language, by label and by language and label, model against the rule baseline, with the verdict only where the test set is large enough. *Models*: register a completed non-trial run, then submit, review language by language, approve, reject or withdraw. Languages not tested on held-out text cannot be ticked for approval, and flags need an explicit acknowledgement. Nothing is deployed or served.
 - **Next:** a trained entity model and a trainable text classifier need real, de-identified, expert-annotated text. They would use the same dataset, experiment and registry path as the other models.
 
 ### Annotated text corpora (training data for the NLP lab, stage 1)

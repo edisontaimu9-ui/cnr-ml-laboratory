@@ -40,10 +40,11 @@
 
   async function request(path, opts) {
     let res;
+    const { blob, ...fetchOpts } = opts;   // blob: true returns the response as a Blob (file downloads)
     try {
       const headers = { Authorization: "Bearer " + store.get() };
-      if (!(opts.body instanceof FormData)) headers["Content-Type"] = "application/json";
-      res = await fetch(API + path, { ...opts, headers });
+      if (!(fetchOpts.body instanceof FormData)) headers["Content-Type"] = "application/json";
+      res = await fetch(API + path, { ...fetchOpts, headers });
     } catch { throw new Error("Cannot reach the ML API. Check your connection and try again."); }
     if (res.status === 401) { signOut(); throw new Error("Your key was not accepted."); }
     if (!res.ok) {
@@ -51,8 +52,14 @@
       let d = b.detail;
       // FastAPI sends validation problems as a list of objects; turn them into readable text.
       if (Array.isArray(d)) d = d.map((e) => ((e.loc || []).slice(1).join(" ") || "input") + ": " + (e.msg || "invalid")).join("; ");
-      throw new Error(d || "Request failed (" + res.status + ").");
+      // Some refusals (corpus uploads) send an object with a message and a list of problems; keep it on the error.
+      let detail = null;
+      if (d && typeof d === "object") { detail = d; d = d.message; }
+      const err = new Error(d || "Request failed (" + res.status + ").");
+      err.detail = detail;
+      throw err;
     }
+    if (blob) return res.blob();
     return res.status === 204 ? null : res.json();
   }
 
@@ -64,6 +71,7 @@
     { id: "matching", label: "Matching", perm: "write:experiments", render: matchingPage },
     { id: "hotspots", label: "Hotspots", perm: "read:hotspots", render: hotspots },
     { id: "nlp", label: "NLP", perm: "read:nlp", render: nlpPage },
+    { id: "corpora", label: "NLP corpora", perm: "read:datasets", render: corporaPage },
     { id: "predict", label: "Predict", perm: "predict:models", render: predictPage },
     { id: "registry", label: "Registry", perm: "read:models", render: registry },
     { id: "datasets", label: "Datasets", perm: "read:datasets", render: datasets },
@@ -105,7 +113,7 @@
         cap("Model evaluation.", "Hold-out and cross-validation, bootstrap ranges, per-class results and leakage guards, to judge how reliable a model is and how well it generalises."),
         cap("Surveillance.", "District hotspots and prevalence trends from aggregated counts, never from individual children."),
         cap("Model management.", "Experiments are recorded and trained models preserved. The registry keeps versions with fixed seeds and hashes for reproducibility, and every deployment passes clinical review."),
-        cap("Text analysis (NLP).", "Structured nutrition information from clinical notes, reports, research text and dietary records in English, Chichewa, Tumbuka and Yao: foods, conditions, symptoms, interventions and measurements, with negation and identifier masking. Rule-based, not a trained model."),
+        cap("Text analysis (NLP).", "Structured nutrition information from clinical notes, reports, research text and dietary records in English, Chichewa, Tumbuka and Yao: foods, conditions, symptoms, interventions and measurements, with negation and identifier masking. The engine is rule-based. Annotated corpora, spaCy training against the rule baseline and a reviewed model registry are available under NLP corpora; no trained NLP model is served."),
         cap("Laboratory memory.", "Decisions, findings, lessons and warnings recorded next to the datasets, experiments and models they are about, kept with their history."),
         cap("CNR integration.", "A pathway for validated models to be served to CNR services and APIs, and an opt-in feed of de-identified data from CNR.")),
       h("h2", null, "Primary objective"),
@@ -1240,6 +1248,357 @@
         go, err2);
     }
     return root;
+  }
+
+  // ---------- NLP corpora, training runs and model review ----------
+  // One page with three tabs (Corpora, Training runs, Models). Routes: corpora, corpora/<id>, corpora/runs, corpora/run-<id>,
+  // corpora/models, corpora/model-<id>. Nothing here serves a model: approval only records that people reviewed it.
+  const LANGS = { en: "English", ny: "Chichewa", tum: "Tumbuka", yao: "Yao", mixed: "Mixed" };
+  const langName = (c) => LANGS[c] || c;
+  const labelName = (k) => ENT_NAMES[k] || k;
+  const VERDICT_CLASS = { "model better": "", "rules better": "watch" };
+  const verdictBadge = (v) => (v ? h("span", { class: "badge " + (VERDICT_CLASS[v] ?? "planned") }, v) : "");
+  const trialBadge = () => h("span", { class: "badge watch" }, "trial · not for use");
+  const nlpStat = (l, n) => h("div", { class: "stat" }, h("b", null, n), h("span", null, l));
+
+  function saveBlob(blob, name) {
+    const url = URL.createObjectURL(blob);
+    const a = h("a", { href: url, download: name });
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+  }
+
+  function nlpTabs(active) {
+    const tabs = [["corpora", "Corpora", true], ["runs", "Training runs", can("read:experiments")], ["models", "Models", can("read:models")]];
+    return h("div", { class: "tabs", role: "navigation", "aria-label": "NLP laboratory sections" }, tabs.filter((t) => t[2]).map(([id, label]) =>
+      h("button", { "aria-current": id === active ? "page" : false, onclick: () => { location.hash = id === "corpora" ? "corpora" : "corpora/" + id; } }, label)));
+  }
+
+  async function corporaPage(arg) {
+    const a = arg || "";
+    let tab = "corpora", body;
+    if (a === "runs") { tab = "runs"; body = await trainingRuns(); }
+    else if (/^run-\d+$/.test(a)) { tab = "runs"; body = await trainingRunDetail(Number(a.slice(4))); }
+    else if (a === "models") { tab = "models"; body = await nlpModelList(); }
+    else if (/^model-\d+$/.test(a)) { tab = "models"; body = await nlpModelDetail(Number(a.slice(6))); }
+    else if (/^\d+$/.test(a)) body = await corpusDetail(Number(a));
+    else body = await corporaHome();
+    return [h("h1", null, "NLP corpora and training"), nlpTabs(tab), [].concat(body).flat(Infinity)];
+  }
+
+  const backLink = (hash, text) => h("p", null, h("button", { class: "link", onclick: () => { location.hash = hash; } }, "← " + text));
+
+  // ----- corpora -----
+  async function corporaHome() {
+    const [rows, fmts] = await Promise.all([api("/v1/nlp/corpora"), api("/v1/nlp/corpora/format")]);
+    const out = [h("div", { class: "notice" }, "A corpus is a set of annotated, de-identified sentences used to train and test entity models. A file with identifiers (titled names, phone numbers, emails, record or ID numbers) is refused whole. Only the text, language and entities are kept, and the audit log holds counts, never text.")];
+    out.push(h("h2", null, "Corpora"));
+    out.push(rows.length
+      ? table(["Corpus", "Versions", "Created by", "Created", ""], rows.map((c) => [c.name, c.versions, c.created_by || "—", fmt(c.created_at), h("button", { class: "link", onclick: () => { location.hash = "corpora/" + c.id; } }, "Open")]))
+      : empty("No corpora yet", can("write:datasets") ? "Download the annotation template, have speakers fill it in, then upload it below." : "A data scientist can upload an annotated file."));
+    out.push(annotationTools());
+    if (can("write:datasets")) out.push(corpusUploader(fmts, null));
+    return out;
+  }
+
+  function annotationTools() {
+    const err = h("p", { class: "error", role: "alert" });
+    const file = h("input", { id: "pl-file", type: "file", accept: ".txt,.csv" });
+    const lang = h("select", { id: "pl-lang" }, h("option", { value: "" }, "Guess from the text"), Object.entries(LANGS).map(([k, v]) => h("option", { value: k }, v)));
+    const tpl = h("button", { onclick: async () => {
+      err.textContent = "";
+      try { saveBlob(await api("/v1/nlp/corpora/template", { blob: true }), "cnr-nlp-annotation-template.csv"); } catch (e) { err.textContent = e.message; }
+    } }, "Download annotation template");
+    const out = [h("p", null, tpl, " A blank sheet with example rows in English, Chichewa, Tumbuka and Yao (the Yao row is a placeholder). Delete the example rows before uploading.")];
+    if (can("run:nlp")) {
+      const pre = h("button", { class: "primary", onclick: async () => {
+        err.textContent = "";
+        const f = file.files[0];
+        if (!f) { err.textContent = "Choose a .txt file (one sentence per line) or a .csv file with a text column first."; return; }
+        const fd = new FormData(); fd.append("file", f); if (lang.value) fd.append("lang", lang.value);
+        try { saveBlob(await api("/v1/nlp/corpora/prelabel", { method: "POST", body: fd, blob: true }), "cnr-nlp-prelabel.csv"); }
+        catch (e) { err.textContent = e.message; }
+      } }, "Download pre-labelled CSV");
+      out.push(h("p", null, "Pre-label: upload plain sentences and get back a CSV holding the rule engine's guesses for speakers to correct. The corrected file uploads as it is. Nothing is stored, and a file with identifiers is refused whole."),
+        h("div", { class: "form3" }, field("Sentences (.txt or .csv)", file, "pl-file"), field("Language", lang, "pl-lang")), pre);
+    }
+    return h("div", { class: "card" }, h("h3", null, "Annotation tools"), ...out, err);
+  }
+
+  function listOf(items, total) {
+    return h("ul", { class: "plain" }, (items || []).map((x) => h("li", null, typeof x === "string" ? x : JSON.stringify(x))),
+      total > (items || []).length ? h("li", { class: "muted" }, "and " + (total - items.length) + " more") : null);
+  }
+
+  function problemsView(r) {
+    const out = [];
+    if (r.identifier_lines_total) out.push(h("div", { class: "notice" }, h("b", null, "Identifiers found. "), r.identifier_lines_total + " line(s) look like they hold personal identifiers" + (Object.keys(r.identifier_types || {}).length ? " (" + Object.keys(r.identifier_types).join(", ") + ")" : "") + ". The file is refused whole. Remove them and check again."), listOf(r.identifier_lines, r.identifier_lines_total));
+    if (r.errors_total) out.push(h("div", { class: "notice" }, h("b", null, r.errors_total + " problem(s) in the file. "), "Fix them and check again."), listOf(r.errors, r.errors_total));
+    return out;
+  }
+
+  function reportView(rep) {
+    const labels = Object.keys(rep.by_label || {}).sort();
+    const langs = Object.keys(rep.by_language || {}).sort();
+    return [
+      h("div", { class: "stats" }, nlpStat("Documents", rep.documents), nlpStat("Entities", rep.entities), nlpStat("Duplicates removed", rep.duplicates_removed || 0), nlpStat("Source format", rep.source_format || "")),
+      langs.length ? table(["Language", "Documents", ...labels.map(labelName)], langs.map((l) => [langName(l), rep.by_language[l], ...labels.map((k) => ((rep.label_by_language || {})[l] || {})[k] || 0)])) : null,
+      labels.length ? h("p", { class: "muted" }, "Entities per label: " + labels.map((k) => labelName(k) + " " + rep.by_label[k]).join(", ") + ".") : null,
+      ...(rep.warnings || []).map((w) => h("div", { class: "notice" }, w)),
+    ];
+  }
+
+  // Upload in two steps, like datasets: check (stores nothing), then store. corpus is null for a new corpus.
+  function corpusUploader(fmts, corpus) {
+    const root = h("details", { class: "card" }, h("summary", null, corpus ? "Add a version" : "Upload a new corpus"));
+    const box = h("div"); root.append(box);
+    const err = h("p", { class: "error", role: "alert" });
+    const result = h("div");
+    const file = h("input", { id: "cu-file", type: "file", accept: ".jsonl,.ndjson,.json,.csv,.bio,.iob,.iob2,.conll,.spacy,.zip" });
+    const fsel = h("select", { id: "cu-fmt" }, h("option", { value: "auto" }, "Detect from the file name"), Object.keys(fmts.formats).map((k) => h("option", { value: k }, k)));
+    const lsel = h("select", { id: "cu-lang" }, h("option", { value: "" }, "From the file"), Object.entries(LANGS).map(([k, v]) => h("option", { value: k }, v)));
+    const lmap = h("textarea", { id: "cu-map", rows: 2, placeholder: 'Optional. Rename labels from another dataset, e.g. {"FOOD_ITEM": "FOOD", "PER": ""}', spellcheck: "false" });
+    const guide = h("details", null, h("summary", null, "Format guide"),
+      h("ul", { class: "plain" }, Object.entries(fmts.formats).map(([k, v]) => h("li", null, h("b", null, k + ": "), v))),
+      h("ul", { class: "plain" }, (fmts.rules || []).map((r) => h("li", null, r))));
+    const build = () => {
+      const fd = new FormData(); fd.append("file", file.files[0]); fd.append("format", fsel.value);
+      if (lsel.value) fd.append("lang", lsel.value);
+      if (lmap.value.trim()) fd.append("label_map", lmap.value.trim());
+      return fd;
+    };
+    const check = h("button", { class: "primary", onclick: async () => {
+      err.textContent = ""; result.replaceChildren();
+      if (!file.files[0]) { err.textContent = "Choose a file first."; return; }
+      try {
+        const r = await api("/v1/nlp/corpora/inspect", { method: "POST", body: build() });
+        result.replaceChildren(...[].concat(r.valid ? storeStep(r) : [h("div", { class: "notice" }, "This file would not be stored."), ...problemsView(r)]).flat());
+      } catch (e) { err.textContent = e.message; if (e.detail) result.replaceChildren(...problemsView(e.detail)); }
+    } }, "Check file");
+    function storeStep(r) {
+      const name = h("input", { id: "cu-name", maxlength: 160, placeholder: "e.g. Clinical notes, Zomba pilot" });
+      const desc = h("textarea", { id: "cu-desc", rows: 2, maxlength: 2000, placeholder: "Where the text came from and who annotated it." });
+      const appr = h("input", { id: "cu-ref", maxlength: 300, placeholder: "Data-sharing or ethics approval reference (required)" });
+      const err2 = h("p", { class: "error", role: "alert" });
+      const go = h("button", { class: "primary", onclick: async () => {
+        err2.textContent = "";
+        if (!corpus && name.value.trim().length < 2) { err2.textContent = "Give the corpus a name."; return; }
+        if (appr.value.trim().length < 5) { err2.textContent = "Give the approval reference (at least 5 characters)."; return; }
+        const fd = build(); fd.append("approval_ref", appr.value.trim());
+        if (!corpus) { fd.append("name", name.value.trim()); fd.append("description", desc.value.trim()); }
+        go.disabled = true;
+        try {
+          const made = await api(corpus ? "/v1/nlp/corpora/" + corpus.id + "/versions" : "/v1/nlp/corpora", { method: "POST", body: fd });
+          const target = "corpora/" + (corpus ? corpus.id : made.id);
+          location.hash = target; show(target);
+        } catch (e) { err2.textContent = e.message; if (e.detail) result.replaceChildren(...problemsView(e.detail)); go.disabled = false; }
+      } }, corpus ? "Store as a new version" : "Store corpus");
+      return [h("div", { class: "notice" }, "The file is valid. Nothing is stored yet."), ...reportView(r.report),
+        h("div", { class: "form3" }, corpus ? null : field("Corpus name", name, "cu-name"), field("Approval reference", appr, "cu-ref")),
+        corpus ? null : field("Description", desc, "cu-desc"), go, err2];
+    }
+    box.append(h("p", null, "Step 1: choose an annotated file. It is checked and nothing is stored. Step 2: review the report and store it."),
+      h("div", { class: "form3" }, field("File", file, "cu-file"), field("Format", fsel, "cu-fmt"), field("Language for documents without one", lsel, "cu-lang")),
+      field("Label map", lmap, "cu-map"), guide, check, err, result);
+    return root;
+  }
+
+  async function corpusDetail(id) {
+    const [c, fmts, limits] = await Promise.all([api("/v1/nlp/corpora/" + id), can("write:datasets") ? api("/v1/nlp/corpora/format") : null, can("write:experiments") ? api("/v1/nlp/training/limits") : null]);
+    const out = [backLink("corpora", "All corpora"), h("h2", null, c.name), c.description ? h("p", null, c.description) : null];
+    out.push(table(["Version", "Documents", "Entities", "Approval reference", "Added by", "Added", "SHA-256"], c.versions.map((v) =>
+      ["v" + v.version, v.documents, v.entities, v.approval_ref, v.created_by || "—", fmt(v.created_at), (v.sha256 || "").slice(0, 12) + "…"])));
+    c.versions.forEach((v, i) => out.push(h("details", { class: "card", open: i === 0 }, h("summary", null, "Version " + v.version + " report"), ...reportView(v.report || {}))));
+    if (limits) out.push(trainingForm(c, limits));
+    if (fmts) out.push(corpusUploader(fmts, c));
+    return out;
+  }
+
+  // ----- training -----
+  function trainingForm(c, limits) {
+    const m = limits.minimums;
+    const num = (id, val, min, max, step) => h("input", { id, type: "number", value: val, min, max, step });
+    const ver = h("select", { id: "tv" }, c.versions.map((v) => h("option", { value: v.version }, "Version " + v.version + " (" + v.documents + " documents)")));
+    const iter = num("tn", 30, 5, 100, 1), drop = num("td", 0.2, 0, 0.5, 0.05), test = num("tt", 0.2, 0.1, 0.4, 0.05), seed = num("ts", 1, 0, 2147483647, 1);
+    const trial = h("input", { id: "tr", type: "checkbox" });
+    const err = h("p", { class: "error", role: "alert" });
+    const go = h("button", { class: "primary", onclick: async () => {
+      err.textContent = ""; go.disabled = true;
+      try {
+        const r = await api("/v1/nlp/training", { method: "POST", body: JSON.stringify({ corpus_id: c.id, version: Number(ver.value), n_iter: Number(iter.value), dropout: Number(drop.value), test_size: Number(test.value), seed: Number(seed.value), trial: trial.checked }) });
+        location.hash = "corpora/run-" + r.id;
+      } catch (e) { err.textContent = e.message; go.disabled = false; }
+    } }, "Start training");
+    return h("details", { class: "card" }, h("summary", null, "Train an entity model on this corpus"),
+      h("p", null, "Trains a spaCy entity model from scratch and scores it on held-out documents against the rule baseline, on the same documents. The number of passes is fixed up front and nothing is tuned on the test set."),
+      h("div", { class: "notice" }, "A normal run needs at least " + m.documents + " documents and " + m.examples_per_label + " examples of every label that appears; smaller corpora are refused. A trial run lowers this to " + m.trial_documents + " documents and " + m.trial_examples_per_label + " examples so the pipeline can be tried. Its results are marked trial and cannot be registered or used."),
+      h("div", { class: "form3" }, field("Corpus version", ver, "tv"), field("Passes over the data (5 to 100)", iter, "tn"), field("Dropout (0 to 0.5)", drop, "td"), field("Share held out for testing (0.1 to 0.4)", test, "tt"), field("Random seed", seed, "ts")),
+      h("div", null, h("label", { for: "tr" }, "Trial run (tiny corpus, results not for use)"), trial), go, err);
+  }
+
+  async function trainingRuns() {
+    const rows = await api("/v1/nlp/training");
+    if (rows.some((r) => r.status === "queued" || r.status === "running")) poll = setTimeout(() => { if (location.hash.slice(1) === "corpora/runs") show("corpora/runs", true); }, 3000);
+    return [h("p", null, "Each run trains a spaCy entity model on one corpus version and scores it on held-out documents against the rule baseline (nlp-rules-1). Runs marked trial used a tiny corpus and are not for use. Start a run from a corpus page."),
+      rows.length ? table(["Run", "Corpus", "Status", "Model F1", "Rules F1", "Verdict", "Started by", "Started", ""], rows.map((r) => {
+        const s = r.summary || {};
+        return ["#" + r.id, (r.corpus_name || "?") + " v" + (r.corpus_version || "?"), h("span", null, statusBadge(r.status), r.trial ? [" ", trialBadge()] : null),
+          n3(s.macro_f1_model), n3(s.macro_f1_rules), r.status === "failed" ? h("span", { class: "muted" }, s.error || "failed") : verdictBadge(s.overall_verdict),
+          r.created_by || "—", fmt(r.created_at), h("button", { class: "link", onclick: () => { location.hash = "corpora/run-" + r.id; } }, "Open")];
+      })) : empty("No training runs yet", can("write:experiments") ? "Open a corpus and start a run." : "A data scientist can start a run.")];
+  }
+
+  // Tables shared by a training run and a registered model: results by language, by label and by language and label.
+  function evalSections(res) {
+    const model = res.model || {}, rules = res.rules || {}, cmp = res.comparison || {}, split = res.split || {};
+    const trainL = split.train_by_language || {}, testL = split.test_by_language || {};
+    const langs = [...new Set([...Object.keys(trainL), ...Object.keys(testL)])].sort();
+    const labels = (res.labels && res.labels.length ? res.labels : Object.keys(model.per_label || {})).slice().sort();
+    const out = [h("h3", null, "By language"),
+      table(["Language", "Training documents", "Test documents", "Test entities", "Model F1", "Rules F1", "Difference", "Verdict"], langs.map((l) => {
+        const m = (model.per_language || {})[l] || {}, ru = (rules.per_language || {})[l] || {}, v = (cmp.per_language || {})[l] || {};
+        return [langName(l), trainL[l] || 0, testL[l] || 0, m.support ?? 0, n3(m.f1), n3(ru.f1), signed(v.difference),
+          testL[l] ? verdictBadge(v.verdict) : h("span", { class: "badge bad" }, "not evaluated")];
+      })),
+      h("h3", null, "By label"),
+      table(["Label", "Training examples", "Test entities", "Precision", "Recall", "Model F1", "Rules F1", "Difference", "Verdict"], labels.map((k) => {
+        const m = (model.per_label || {})[k] || {}, ru = (rules.per_label || {})[k] || {}, v = (cmp.per_label || {})[k] || {};
+        return [labelName(k), (split.train_by_label || {})[k] || 0, m.support ?? 0, n3(m.precision), n3(m.recall), n3(m.f1), n3(ru.f1), signed(v.difference), verdictBadge(v.verdict)];
+      }))];
+    const cell = (l, k) => {
+      const m = ((model.per_language_label || {})[l] || {})[k], ru = ((rules.per_language_label || {})[l] || {})[k];
+      return m ? n3(m.f1) + " / " + n3(ru && ru.f1) + " (n=" + m.support + ")" : "";
+    };
+    out.push(h("details", { class: "card" }, h("summary", null, "Language by label: model F1 / rules F1 (test entities)"),
+      table(["Language", ...labels.map(labelName)], langs.map((l) => [langName(l), ...labels.map((k) => cell(l, k))]))));
+    const loss = res.loss_by_epoch || [];
+    if (loss.length) out.push(h("p", { class: "muted" }, "Training loss over " + loss.length + " passes: " + loss[0] + " at the start, " + loss[loss.length - 1] + " at the end."));
+    return out;
+  }
+
+  async function trainingRunDetail(id) {
+    const r = await api("/v1/nlp/training/" + id);
+    const res = r.results || {};
+    const out = [backLink("corpora/runs", "All training runs"),
+      h("div", { class: "row" }, h("h2", null, "Training run #" + r.id), h("span", null, statusBadge(r.status), r.trial ? [" ", trialBadge()] : null)),
+      h("p", { class: "muted" }, (r.corpus_name || "Corpus") + " v" + (r.corpus_version || "?") + " · started " + fmt(r.created_at) + " by " + (r.created_by || "—") + (r.finished_at ? " · finished " + fmt(r.finished_at) : ""))];
+    if (r.status === "queued" || r.status === "running") {
+      out.push(h("div", { class: "notice" }, "Training is running. This page refreshes by itself."));
+      poll = setTimeout(() => { if (location.hash.slice(1) === "corpora/run-" + id) show("corpora/run-" + id, true); }, 3000);
+      return out;
+    }
+    if (r.status === "failed") { out.push(h("div", { class: "notice" }, res.error || "The run failed.")); return out; }
+    const cfg = res.config || {}, cmp = (res.comparison || {}).overall || {}, split = res.split || {};
+    if (r.trial) out.push(h("div", { class: "notice" }, h("b", null, "Trial run. "), "The corpus was too small for a trustworthy model. These results show that the pipeline works and nothing else. A trial run cannot be registered."));
+    if (res.notice) out.push(h("div", { class: "notice" }, res.notice));
+    (res.warnings || []).forEach((w) => out.push(h("div", { class: "notice" }, w)));
+    if (res.skipped_misaligned) out.push(h("div", { class: "notice" }, res.skipped_misaligned + " document(s) were skipped because an entity boundary fell inside a word."));
+    out.push(h("p", { class: "muted" }, (res.engine || "spacy-ner-xx") + " · baseline " + (res.baseline_engine || "nlp-rules-1") + " · " + (cfg.n_iter || "?") + " passes, dropout " + (cfg.dropout ?? "?") + ", test share " + (cfg.test_size ?? "?") + ", seed " + (cfg.seed ?? "?")));
+    out.push(h("div", { class: "stats" }, nlpStat("Model macro F1", n3((res.model || {}).macro_f1)), nlpStat("Rules macro F1", n3((res.rules || {}).macro_f1)),
+      nlpStat("Training documents", split.train_documents ?? "—"), nlpStat("Test documents", split.test_documents ?? "—")));
+    out.push(h("p", null, "Overall: ", verdictBadge(cmp.verdict), cmp.difference != null ? " (F1 difference " + signed(cmp.difference) + " on " + cmp.support + " test entities)" : "",
+      h("span", { class: "muted" }, " " + ((res.comparison || {}).note || ""))));
+    out.push(...evalSections(res));
+    if (!r.trial && can("write:models")) out.push(registerNlpBox(r));
+    else if (!r.trial) out.push(h("p", { class: "muted" }, "A data scientist can register this run in the model registry."));
+    return out;
+  }
+
+  function registerNlpBox(r) {
+    const name = h("input", { id: "rn-name", maxlength: 64, placeholder: "nlp-ner-xx" });
+    const use = h("textarea", { id: "rn-use", rows: 3, maxlength: 2000, placeholder: "Intended use and setting, e.g. suggesting entities in de-identified clinical notes for a person to confirm. Not a diagnosis." });
+    const err = h("p", { class: "error", role: "alert" });
+    const go = h("button", { class: "primary", onclick: async () => {
+      err.textContent = "";
+      if (name.value.trim().length < 3) { err.textContent = "Give the model a name of at least 3 characters: lower-case letters, digits and hyphens."; return; }
+      if (use.value.trim().length < 20) { err.textContent = "Describe the intended use in at least 20 characters."; return; }
+      go.disabled = true;
+      try { const v = await api("/v1/nlp/models", { method: "POST", body: JSON.stringify({ training_run_id: r.id, name: name.value.trim().toLowerCase(), intended_use: use.value.trim() }) }); location.hash = "corpora/model-" + v.id; }
+      catch (e) { err.textContent = e.message; go.disabled = false; }
+    } }, "Register as model version");
+    return h("details", { class: "card" }, h("summary", null, "Register this run in the NLP model registry"),
+      h("p", { class: "muted" }, "Registering saves a frozen copy of the model file and its results. It does not make the model available: nothing serves an NLP model yet. A different person must review it, language by language."),
+      h("div", { class: "form3" }, field("Model name", name, "rn-name")), field("Intended use", use, "rn-use"), go, err);
+  }
+
+  // ----- model registry and review -----
+  async function nlpModelList() {
+    const rows = await api("/v1/nlp/models?limit=200");
+    return [h("div", { class: "notice" }, "A version moves from candidate to in review to approved or rejected. Approval is per language and only records that a different person read the evaluation and accepted the model for the languages listed. It does not make the model clinically validated, and nothing serves an NLP model yet."),
+      rows.length ? table(["Model", "Version", "Status", "Model F1", "Rules F1", "Verdict", "Approved languages", "Registered by", "Registered", ""], rows.map((v) => {
+        const hl = v.headline || {};
+        return [v.name, "v" + v.version, vBadge(v.status), n3(hl.macro_f1_model), n3(hl.macro_f1_rules), verdictBadge(hl.overall_verdict),
+          (v.approved_languages || []).map(langName).join(", ") || "none", v.created_by || "—", fmt(v.created_at), h("button", { class: "link", onclick: () => { location.hash = "corpora/model-" + v.id; } }, "Open")];
+      })) : empty("No registered NLP models", can("write:models") ? "Open a completed, non-trial training run and register it to start the review." : "A data scientist can register a completed training run.")];
+  }
+
+  async function nlpModelDetail(id) {
+    const v = await api("/v1/nlp/models/" + id);
+    const m = v.metrics_json || {}, lr = v.language_review || {};
+    const reload = () => show("corpora/model-" + id);
+    const out = [backLink("corpora/models", "All NLP models"),
+      h("div", { class: "row" }, h("h2", null, v.name + " · v" + v.version), vBadge(v.status)),
+      h("p", { class: "muted" }, "Training run ", h("button", { class: "link", onclick: () => { location.hash = "corpora/run-" + v.training_run_id; } }, "#" + v.training_run_id),
+        " · registered by " + (v.created_by || "—") + " on " + fmt(v.created_at) + (v.artifact_sha256 ? " · file SHA-256 " + v.artifact_sha256.slice(0, 12) + "…" : "")),
+      h("div", { class: "notice" }, "Intended use: " + (v.intended_use || "—")),
+      v.notice ? h("div", { class: "notice" }, v.notice) : null];
+    if (v.approved_languages && v.approved_languages.length) out.push(h("p", null, h("b", null, "Approved for: "), v.approved_languages.map(langName).join(", ") + "."));
+    out.push(h("h2", null, "Review by language"),
+      table(["Language", "Documents", "Test documents", "Test entities", "Model F1", "Rules F1", "Verdict", "Flags"], Object.entries(lr).map(([l, x]) =>
+        [langName(l), x.documents, x.test_documents, x.test_entities, n3(x.f1_model), n3(x.f1_rules), verdictBadge(x.verdict),
+          x.flags.length ? h("div", null, h("span", { class: "badge " + (x.blocking ? "bad" : "watch") }, x.blocking ? "cannot be approved" : "needs acknowledgement"), h("ul", { class: "plain" }, x.flags.map((f) => h("li", null, f)))) : h("span", { class: "muted" }, "none")])));
+    (m.warnings || []).forEach((w) => out.push(h("div", { class: "notice" }, w)));
+    if (m.skipped_misaligned) out.push(h("div", { class: "notice" }, m.skipped_misaligned + " document(s) were skipped in training or testing because an entity boundary fell inside a word."));
+    out.push(h("h2", null, "Evaluation (frozen at registration)"), ...evalSections(m));
+
+    const act = [];
+    if (v.status === "candidate" && can("write:models")) act.push(h("p", null, h("button", { class: "primary", onclick: async (ev) => {
+      if (!confirm("Submit this version for review?")) return;
+      ev.target.disabled = true;
+      try { await api("/v1/nlp/models/" + id + "/submit", { method: "POST", body: JSON.stringify({}) }); reload(); } catch (e) { alert(e.message); ev.target.disabled = false; }
+    } }, "Submit for review")));
+    if (v.status === "in_review" && can("approve:models")) act.push(nlpReviewForm(v, m, reload));
+    if (v.status === "in_review" && !can("approve:models")) act.push(h("div", { class: "notice" }, "Waiting for a clinical reviewer."));
+    if (v.status === "approved" && can("approve:models")) act.push(h("p", null, h("button", { class: "danger", onclick: async () => {
+      const why = prompt("Why is this version being withdrawn? (10+ characters)");
+      if (!why) return;
+      try { await api("/v1/nlp/models/" + id + "/retire", { method: "POST", body: JSON.stringify({ reason: why.trim() }) }); reload(); } catch (e) { alert(e.message); }
+    } }, "Withdraw this version")));
+    if (act.length) out.push(h("h2", null, "Actions"), ...act);
+
+    if (v.status !== "candidate" && v.status !== "in_review") out.push(h("h2", null, "Review"),
+      h("p", null, (v.approved_by ? "Approved by " + v.approved_by + " on " + fmt(v.reviewed_at) : "Decision recorded " + fmt(v.reviewed_at)) + (v.clinical_validation_ref ? " · evidence: " + v.clinical_validation_ref : "")),
+      h("p", null, v.review_notes || ""), v.warnings_acknowledged ? h("small", null, "The reviewer acknowledged the flags and warnings.") : null,
+      v.retired_reason ? h("p", { class: "muted" }, "Retired: " + v.retired_reason) : null);
+    out.push(h("h2", null, "History"), table(["When", "Who", "What", "Note"], (v.history || []).map((x) => [fmt(x.ts), x.by, x.action, x.note || ""])));
+    return out;
+  }
+
+  function nlpReviewForm(v, m, reload) {
+    const lr = v.language_review || {};
+    const boxes = Object.entries(lr).map(([l, x]) => ({ l, x, cb: h("input", { type: "checkbox", id: "al-" + l, disabled: x.blocking }) }));
+    const anyFlag = Object.values(lr).some((x) => x.flags.length && !x.blocking) || Boolean(m.skipped_misaligned);
+    const ref = h("input", { id: "nr-ref", maxlength: 500, placeholder: "e.g. COMREC-2026-017 expert review of Chichewa and English output" });
+    const notes = h("textarea", { id: "nr-notes", rows: 3, maxlength: 3000, placeholder: "What you checked: per-label and per-language results against the rules, the flags above, whether the setting matches the intended use." });
+    const ack = h("input", { id: "nr-ack", type: "checkbox" });
+    const err = h("p", { class: "error", role: "alert" });
+    const send = (path, body, check) => async (ev) => {
+      err.textContent = "";
+      const problem = check(); if (problem) { err.textContent = problem; return; }
+      ev.target.disabled = true;
+      try { await api("/v1/nlp/models/" + v.id + path, { method: "POST", body: JSON.stringify(body()) }); reload(); }
+      catch (e) { err.textContent = e.message; ev.target.disabled = false; }
+    };
+    const chosen = () => boxes.filter((b) => b.cb.checked).map((b) => b.l);
+    return h("div", { class: "card" }, h("h3", null, "Clinical review"),
+      h("p", { class: "muted" }, "You must be a different person from the one who registered or submitted this version. Tick only the languages you are signing off. A language that was not tested on held-out text cannot be approved."),
+      h("div", null, boxes.map(({ l, x, cb }) => h("div", null, h("label", { for: "al-" + l }, langName(l) + (x.blocking ? " (not evaluated, cannot be approved)" : x.flags.length ? " (flagged, see above)" : "")), cb))),
+      field("Validation evidence reference", ref, "nr-ref"), field("Review notes", notes, "nr-notes"),
+      anyFlag ? h("div", null, h("label", { for: "nr-ack" }, "I have read the flags and warnings above and considered them"), ack) : null,
+      h("div", { class: "inline" },
+        h("button", { class: "primary", onclick: send("/approve", () => ({ approved_languages: chosen(), clinical_validation_ref: ref.value.trim(), review_notes: notes.value.trim(), acknowledge_warnings: ack.checked }), () =>
+          !chosen().length ? "Tick at least one language to approve." : ref.value.trim().length < 5 ? "Give the validation evidence reference (5+ characters)." : notes.value.trim().length < 20 ? "Write review notes of at least 20 characters." : "") }, "Approve selected languages"),
+        h("button", { class: "danger", onclick: send("/reject", () => ({ review_notes: notes.value.trim() }), () => (notes.value.trim().length < 10 ? "Write the reason for rejecting in at least 10 characters." : "")) }, "Reject")), err);
   }
 
   async function audit() {
