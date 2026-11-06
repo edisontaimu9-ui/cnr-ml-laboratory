@@ -83,6 +83,7 @@ class Config:
     leakage_tokens: list[str] = field(default_factory=list)      # column-name words that may not be features (see catalog.py)
     leakage_substrings: list[str] = field(default_factory=list)  # same, for run-together names such as "bloodpressure"
     warn_substrings: list[str] = field(default_factory=list)     # label-definition features that are allowed but warned about
+    warn_note: str = ""                                          # reason shown for them; "" = the label-definition text
     calibration: str = "none"                  # logistic only: none | sigmoid | isotonic (recalibration is opt-in, see _calibration_verdict)
 
 
@@ -114,7 +115,8 @@ def _prepare(df: pd.DataFrame, cfg: Config, warnings: list[str]):
                             "Exclude it (and any other blood pressure or diagnosis columns) and run again.")
     overlap = [c for c in cand if any(sub in c.lower().replace("_", "").replace(" ", "") for sub in cfg.warn_substrings)]
     if overlap:
-        warnings.append(f"'{overlap[0][:60]}' is part of this model's label definition. It is allowed because it is the cheap measurement the "
+        warnings.append(cfg.warn_note.format(col=overlap[0][:60]) if cfg.warn_note else
+                        f"'{overlap[0][:60]}' is part of this model's label definition. It is allowed because it is the cheap measurement the "
                         "screen relies on, but it gives the model a head start: scores overstate how well the other features predict the label. "
                         "Train the same model with it excluded and compare before trusting the result.")
     num, cat, n = [], [], len(df)

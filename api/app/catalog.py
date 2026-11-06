@@ -22,6 +22,10 @@ CATALOG = [
      "Screen for metabolic syndrome from cheap measurements (waist, BMI, age, diet) when blood tests are not available."),
     ("prediabetes-screen", "Prediabetes / raised HbA1c finder", "classification",
      "Identify people most likely to need confirmatory testing for raised HbA1c or prediabetes when lab results are unavailable."),
+    ("low-birth-weight-risk", "Low birth weight risk", "classification",
+     "Estimate the risk of a baby being born under 2,500 g from maternal and antenatal context, to prioritise extra antenatal and nutrition support."),
+    ("preterm-growth-faltering", "Preterm infant growth faltering", "classification",
+     "Estimate which preterm infants are likely to fall away from their growth trajectory (Fenton reference) in the neonatal unit, from early-life context."),
     ("ckd-nutrition-risk", "CKD nutrition risk", "classification",
      "Estimate nutrition risk in patients with chronic kidney disease."),
     ("hospital-malnutrition-risk", "Hospital malnutrition risk", "classification",
@@ -58,16 +62,42 @@ LABEL_NOTES = {
         "dataset or analysed separately. A positive result means 'arrange confirmatory testing', never 'has prediabetes'. This is a "
         "different target from the diabetes risk model, which estimates diabetes itself."
     ),
+    "low-birth-weight-risk": (
+        "Label from the measured birth weight: under 2,500 g (low birth weight), taken within the first hour after birth. If the data owner "
+        "wants very low (under 1,500 g) or small-for-gestational-age as the target, that is a different label and must be said so. Birth "
+        "weight and everything derived from it or measured at or after birth (low-birth-weight and SGA flags, birth length, head "
+        "circumference, Apgar) must never be used as features. Features are maternal and antenatal: age, height, BMI or MUAC, haemoglobin, "
+        "parity, interval since last birth, antenatal visits, malaria prophylaxis, and similar. Gestational age at delivery and preterm "
+        "birth are known only at delivery: they are allowed with a warning, but only make sense if the model is used at birth, not "
+        "during pregnancy. A high estimate means 'offer extra support and plan the delivery', never 'the baby will be small'."
+    ),
+    "preterm-growth-faltering": (
+        "Label from Fenton preterm growth reference values calculated by CNR or the Chakudya API's deterministic Fenton calculations, "
+        "not re-implemented here: for example a fall in weight z-score of at least 1.0 from birth to discharge or 36 weeks postmenstrual "
+        "age, or weight below the 10th percentile at that point. The data owner agrees the definition and the time point before any "
+        "training, and every row must use the same one. Features must be known early (by about the end of the first week): gestational "
+        "age, birth weight and birth z-score, sex, multiple birth, antenatal steroids, early illness, ventilation, time to first feed and "
+        "early nutrition intake. Discharge or later weights, later z-scores or percentiles, z-score change, growth velocity, weight gain "
+        "and any faltering or EUGR column must never be used as features. A baby born with a high z-score has further to fall, so birth "
+        "z-score is expected to matter; read results with that in mind. A positive result means 'review feeding and growth closely', "
+        "never a diagnosis."
+    ),
 }
 
 # Column-name words that may not be features for a model (they define or reveal its label). Whole words, split on
 # anything that is not a letter or digit, plus the run-together forms in LEAKAGE_SUBSTRINGS.
 LEAKAGE_TOKENS = {
+    "low-birth-weight-risk": {"bw", "bwt", "lbw", "vlbw", "elbw", "sga", "lga", "aga", "apgar"},
+    "preterm-growth-faltering": {"pgf", "eugr", "ugr", "pgr"},
     "prediabetes-screen": {"hba1c", "a1c", "fpg", "fbg", "fbs", "rbs", "ogtt", "dm", "t2dm", "ifg", "igt"},
     "metabolic-syndrome-screen": {"tg", "hdl", "fpg", "fbg", "fbs", "sbp", "dbp", "bp", "htn", "metsyn"},
     "hypertension-risk": {"systolic", "diastolic", "sbp", "dbp", "bp", "htn", "hypertension", "hypertensive", "antihypertensive"},
 }
 LEAKAGE_SUBSTRINGS = {
+    "low-birth-weight-risk": ("birthweight", "weightatbirth", "wtatbirth", "lowbirth", "birthlength", "lengthatbirth", "birthhead",
+                              "headcircumferenceatbirth", "apgar", "smallforgest", "neonataloutcome"),
+    "preterm-growth-faltering": ("falter", "growthfailure", "growthrestrict", "extrauterine", "discharge", "followup", "36week",
+                                 "zchange", "changeinz", "deltaz", "zscorechange", "velocity", "weightgain", "gainrate", "growthrate"),
     "prediabetes-screen": ("hba1c", "a1c", "glycated", "glycosylated", "glucose", "glycaemia", "glycemia", "diabet", "prediab",
                            "metformin", "insulin", "sulfonylurea", "sulphonylurea", "ogtt"),
     "metabolic-syndrome-screen": ("triglycer", "hdl", "glucose", "bloodpressure", "systolic", "diastolic", "hypertens",
@@ -77,7 +107,17 @@ LEAKAGE_SUBSTRINGS = {
 
 # Features that are part of the label definition but are allowed, with a warning on every run.
 LEAKAGE_WARN_SUBSTRINGS = {
+    "low-birth-weight-risk": ("gestation", "preterm", "premat"),
     "metabolic-syndrome-screen": ("waist",),
+}
+
+# Reason shown for a warned feature, where the generic "part of the label definition" text does not fit. {col} is the column name.
+LEAKAGE_WARN_NOTES = {
+    "low-birth-weight-risk": (
+        "'{col}' is only known at or after delivery. It is allowed only if this model is meant to be used at birth. For antenatal use, "
+        "leave it out: it carries a large part of the signal, so scores overstate how well the model works during pregnancy. "
+        "Train the same model with it excluded and compare."
+    ),
 }
 
 SAFETY_NOTICE = (

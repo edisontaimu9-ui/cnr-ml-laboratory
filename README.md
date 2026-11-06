@@ -5,7 +5,7 @@ An independent machine-learning platform for the Chakudya Nutrition Registry (CN
 You can upload and de-identify datasets, train and evaluate models, review and approve them, serve the deployed version, and let CNR request assessments through a dedicated, authenticated contract. Predictions are never presented as confirmed diagnoses.
 
 ## Platform
-- **ML API** (`api/`, FastAPI): API-key authentication, four roles, audit log, full metadata schema (datasets, versions, experiments, model versions), a catalogue of the ten planned model targets, `/health`.
+- **ML API** (`api/`, FastAPI): API-key authentication, four roles, audit log, full metadata schema (datasets, versions, experiments, model versions), a catalogue of the twelve planned model targets, `/health`.
 - **Dashboard** (`dashboard/`, static HTML/JS, no build step): installable as an app (PWA), with overview, models, experiments, exploration, hotspots, datasets, registry, prediction, CNR integration, audit log and key management. Pages show honest empty states until there is data.
 - **Deployment**: Dockerfiles, `docker-compose.yml`, `render.yaml`, CI, Supabase RLS script.
 - It does not touch CNR's production API. The two will talk only through authenticated endpoints (see CNR integration below).
@@ -46,6 +46,18 @@ You can upload and de-identify datasets, train and evaluate models, review and a
 - **Label:** measured HbA1c at or above 5.7% (ADA threshold; includes the diabetes range because the aim is who needs a confirmatory test), or the definition agreed with the data owner. People with known diabetes should be left out of the dataset or analysed separately.
 - **Leakage guard:** HbA1c, glucose (fasting, random, OGTT), diabetes or prediabetes diagnosis and diabetes-treatment columns (metformin, insulin, sulfonylureas) are **refused as features**: the run fails and names the column. Exclude them next to the target.
 - **Training:** the usual flow. Logistic regression gives readable odds ratios; the calibration check matters here because the output is used to decide who gets tested.
+
+## Low birth weight risk (`low-birth-weight-risk`)
+- **Purpose:** estimate the risk of a baby being born under 2,500 g from maternal and antenatal context, to prioritise extra antenatal and nutrition support. A high estimate means *offer extra support*, never *the baby will be small*.
+- **Label:** measured birth weight under 2,500 g, taken within an hour of birth. Very low birth weight or small-for-gestational-age are different labels and must be agreed separately.
+- **Leakage guard:** birth weight and anything derived from it or measured at or after birth (LBW/VLBW/SGA flags, birth length, head circumference, Apgar) are **refused as features**; the run fails and names the column.
+- **Allowed with a warning:** gestational age at delivery and preterm birth are only known at delivery. They are allowed for a model used at birth, but every run that uses them warns that scores overstate antenatal performance. Train once without them and compare.
+
+## Preterm infant growth faltering (`preterm-growth-faltering`)
+- **Purpose:** estimate which preterm infants are likely to fall away from their growth trajectory on the Fenton reference, from early-life context, so feeding and growth can be reviewed closely. Never a diagnosis.
+- **Label:** calculated from Fenton reference values by CNR or the Chakudya API's deterministic Fenton calculations, not re-implemented here: for example a fall in weight z-score of at least 1.0 from birth to discharge or 36 weeks postmenstrual age, or weight under the 10th percentile at that point. The data owner agrees the definition and time point first, and every row must use the same one.
+- **Leakage guard:** discharge or follow-up weights, later z-scores or percentiles, z-score change, growth velocity, weight gain, and faltering/EUGR columns are **refused as features**. Birth weight, gestational age and birth z-score are allowed (they are known early). Birth z-score is expected to matter because a larger baby has further to fall.
+- **Small samples:** neonatal-unit datasets are usually small; the usual small-dataset, baseline and confidence-range warnings apply and should be taken seriously.
 
 ## Exploration (unsupervised analysis)
 - **A separate type, not a model.** An *exploration* looks for groups of similar rows (**clustering**, k-means) and unusual rows (**anomaly detection**, isolation forest) in a de-identified dataset version. There is no target column and no catalogue model. It is for understanding data and checking data quality.
