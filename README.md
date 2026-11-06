@@ -1,8 +1,27 @@
 # CNR Machine Learning Laboratory
 
-An independent machine-learning platform for the Chakudya Nutrition Registry (CNR): datasets, training, evaluation, a model registry and a prediction API, with governance built in.
+The CNR Machine Learning Laboratory is a machine-learning and predictive-analytics platform built as an extension of the Chakudya Nutrition Registry (CNR). It gives nutrition scientists, researchers and developers one governed place to prepare data, explore it, train and compare models, evaluate them honestly, keep a versioned record of every result, and, once a model is validated and approved, let CNR use it.
 
-You can upload and de-identify datasets, train and evaluate models, review and approve them, serve the deployed version, and let CNR request assessments through a dedicated, authenticated contract. Predictions are never presented as confirmed diagnoses.
+It exists to turn nutrition data into usable intelligence for Malawi: research, clinical decision support, public-health surveillance and risk prediction. Predictions are decision support, never confirmed diagnoses.
+
+## What it does
+- **Prepare data safely.** Upload `.csv` or `.xlsx`; the lab detects identifiers, lets you drop or pseudonymise them, profiles types and missing values, checks k-anonymity on quasi-identifiers, and stores only the de-identified table with a hash and an approval reference.
+- **Explore without labels (unsupervised).** Clustering (k-means) and anomaly detection (isolation forest), including a cardiometabolic phenotypes preset. Exploration is never deployed.
+- **Train supervised models.** XGBoost, a neural network (MLP) and interpretable logistic regression (odds ratios and calibrated probabilities), for classification and numeric targets, against a catalogue of eighteen nutrition and health targets.
+- **Compare algorithms fairly.** A neural network or logistic regression run is fitted next to XGBoost on the identical split, folds and class weights, with a paired-bootstrap verdict. Every score sits beside a trivial baseline.
+- **Evaluate for reliability, not just accuracy.** Stratified hold-out, cross-validation on the training part only, bootstrap 95% ranges, accuracy, balanced accuracy, macro-F1, precision and recall per class, ROC-AUC, confusion matrix and feature importance. Logistic regression runs add calibration (Brier score, log loss, expected calibration error, reliability table). Leakage guards refuse or flag features that define the label, and warn about suspiciously strong results.
+- **Analyse public-health surveillance.** District hotspots and prevalence trends on aggregated counts, never on individual children.
+- **Evaluate food-name matching.** Learned versus names-only matching, evaluation only.
+- **Manage models.** Every experiment is recorded; trained pipelines are saved privately; a registry keeps versions, a clinical-review step, deployment, rollback and withdrawal, with fixed seeds and hashes for reproducibility.
+- **Integrate with CNR.** The deployed version of a model is served to CNR through a dedicated, authenticated contract, and CNR is told when a model changes. The lab can also pull CNR's de-identified surveillance counts and, for models CNR holds data for, de-identified training rows, automatically and only if you switch it on.
+
+## Governance and safety
+- **Experimental until approved.** A training run never makes a model available. A model is served only after clinical review and deployment by an administrator, for its stated intended use. Until then it stays `planned` or `in_development`, and CNR assessments are refused with a clear message.
+- **Separation by design.** Unsupervised exploration, hotspot analysis and name matching are separate from the model path: they register nothing, serve nothing and announce nothing to CNR.
+- **Accountability.** Four user roles (viewer, data scientist, clinical reviewer, admin), a separate service key for CNR, API-key authentication and an audit log of uploads, runs, approvals and deployments.
+- **Not covered yet.** The lab does not run subgroup fairness checks (for example by sex or district) and does not replace external clinical validation. Both are needed before a model is used on people.
+
+**Platform philosophy:** from nutrition data to machine-learning research, and from validated models to practical nutrition intelligence.
 
 ## Platform
 - **ML API** (`api/`, FastAPI): API-key authentication, four roles, audit log, full metadata schema (datasets, versions, experiments, model versions), a catalogue of the eighteen planned model targets, `/health`.
