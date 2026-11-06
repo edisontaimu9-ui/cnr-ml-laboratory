@@ -79,12 +79,35 @@
     const c = o.counts;
     return [
       h("h1", null, "Overview"),
-      h("p", null, "The Machine Learning Laboratory of the Chakudya Nutrition Registry (CNR). Upload and de-identify datasets, train and evaluate models, review and approve them in the registry, and serve the deployed version to CNR. Predictions are decision support, never confirmed diagnoses."),
+      h("p", null, "CNR ML Laboratory is a machine learning and predictive analytics platform developed as an extension of the Chakudya Nutrition Registry (CNR). It provides an environment for nutrition data analysis, machine learning experimentation, predictive model development, training, evaluation, comparison and model versioning."),
+      h("p", null, "It is designed to turn nutrition data into actionable intelligence, supporting statistical and AI-driven models for nutrition research, clinical decision support, public health surveillance and risk prediction. Predictions are decision support, never confirmed diagnoses."),
       h("div", { class: "notice" }, o.safety_notice),
       h("div", { class: "stats" }, [["Planned models", c.model_definitions], ["Datasets", c.datasets], ["Experiments", c.experiments], ["Explorations", c.explorations], ["Hotspot analyses", c.hotspot_analyses], ["Model versions", c.model_versions], ["Deployed models", c.deployed_models]]
         .map(([l, n]) => h("div", { class: "stat" }, h("b", null, n), h("span", null, l)))),
       c.datasets === 0 ? empty("No datasets yet", "Create one under Datasets and upload a file. Nothing has been trained and no model is available for predictions.") : null,
+      ...aboutLab(),
       h("p", { class: "muted" }, "API " + o.service.version + " · " + o.service.environment),
+    ];
+  }
+
+  // What the laboratory is for. Every capability here exists in the code; keep it that way when this list changes.
+  function aboutLab() {
+    const cap = (lead, text) => h("li", null, h("b", null, lead + " "), text);
+    return [
+      h("h2", null, "Core capabilities"),
+      h("ul", { class: "plain" },
+        cap("Data preparation.", "Upload a file; identifiers are detected and can be dropped or pseudonymised, types and missing values are profiled, and only the de-identified table is stored."),
+        cap("Data exploration.", "Unsupervised clustering and anomaly detection to find patterns and unusual records in nutrition data, kept separate from any deployed model."),
+        cap("Supervised learning.", "Predictive models with XGBoost, a neural network (MLP) and interpretable logistic regression, for the eighteen nutrition and health targets in the catalogue."),
+        cap("Model comparison.", "Algorithms are compared on the identical split against a trivial baseline, using accuracy, precision, recall, F1, ROC-AUC and, for logistic regression, calibration."),
+        cap("Model evaluation.", "Hold-out and cross-validation, bootstrap ranges, per-class results and leakage guards, to judge how reliable a model is and how well it generalises."),
+        cap("Surveillance.", "District hotspots and prevalence trends from aggregated counts, never from individual children."),
+        cap("Model management.", "Experiments are recorded and trained models preserved. The registry keeps versions with fixed seeds and hashes for reproducibility, and every deployment passes clinical review."),
+        cap("CNR integration.", "A pathway for validated models to be served to CNR services and APIs, and an opt-in feed of de-identified data from CNR.")),
+      h("h2", null, "Primary objective"),
+      h("p", null, "To establish a research-oriented machine learning environment that supports nutrition scientists, researchers and developers in building, testing and evaluating data-driven solutions for Malawi's nutrition challenges."),
+      h("div", { class: "notice" }, h("b", null, "Important. "), "Models developed in the laboratory remain experimental until appropriately validated and approved for their intended use. Unsupervised exploration is kept separate from production deployment. The laboratory does not yet run subgroup fairness checks (for example by sex or district) and does not replace external clinical validation."),
+      h("p", { class: "muted" }, "From nutrition data to machine learning research, and from validated models to practical nutrition intelligence."),
     ];
   }
 
