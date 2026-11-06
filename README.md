@@ -5,7 +5,7 @@ An independent machine-learning platform for the Chakudya Nutrition Registry (CN
 You can upload and de-identify datasets, train and evaluate models, review and approve them, serve the deployed version, and let CNR request assessments through a dedicated, authenticated contract. Predictions are never presented as confirmed diagnoses.
 
 ## Platform
-- **ML API** (`api/`, FastAPI): API-key authentication, four roles, audit log, full metadata schema (datasets, versions, experiments, model versions), a catalogue of the fourteen planned model targets, `/health`.
+- **ML API** (`api/`, FastAPI): API-key authentication, four roles, audit log, full metadata schema (datasets, versions, experiments, model versions), a catalogue of the eighteen planned model targets, `/health`.
 - **Dashboard** (`dashboard/`, static HTML/JS, no build step): installable as an app (PWA), with overview, models, experiments, exploration, hotspots, datasets, registry, prediction, CNR integration, audit log and key management. Pages show honest empty states until there is data.
 - **Deployment**: Dockerfiles, `docker-compose.yml`, `render.yaml`, CI, Supabase RLS script.
 - It does not touch CNR's production API. The two will talk only through authenticated endpoints (see CNR integration below).
@@ -66,6 +66,37 @@ You can upload and de-identify datasets, train and evaluate models, review and a
 - **Allowed with a warning:** waist and similar body-size measures (overweight model); weight, BMI, MUAC, waist and head circumference (stunting model, only if height is not measured where the model is used).
 - **Naming:** the upload step treats column names containing mother, father, guardian or caregiver as possible personal names and drops them unless kept with a reason. Name parent measurements `maternal_bmi`, `parental_height_cm` and so on.
 - **Name matching:** column-name fragments of three characters or fewer (such as `bmi`) match whole words only, so a column like `submission_date` is not caught.
+
+## Refeeding syndrome risk (`refeeding-syndrome-risk`)
+- **Purpose:** estimate which patients are at risk of refeeding syndrome when nutrition support is started, from what is known before the first feed, so electrolytes are checked and feeding starts with care. A positive result means *check electrolytes and start feeding with care*, never *has refeeding syndrome*.
+- **Label:** measured electrolytes after feeding is started or substantially increased, with one definition for every row (for example the ASPEN 2020 consensus criteria: a fall in phosphate, potassium or magnesium within 5 days of starting or increasing energy, graded by size of fall and organ dysfunction), or the one the data owner agrees. Adults and children (including severe acute malnutrition on F-75 or RUTF) use different definitions: one population per dataset.
+- **Leakage guard:** values after feeding starts (day 1 to 7, 24/48/72 h, nadir, post-feed), electrolyte falls, electrolyte replacement or repletion, the diagnosis and its complications are **refused as features**.
+- **Timing guard:** phosphate, potassium, magnesium and similar columns are allowed **only if the name says they were measured before feeding** (`baseline_`, `admission_`, `prefeeding_`, for example `baseline_phosphate`). A bare `phosphate` is refused with a message saying so, because the same measurement after feeding is the label.
+- **Allowed with a warning:** how fast feeding was started (starting kcal/kg, feeding rate) and thiamine given in advance. High-risk patients are fed more slowly, so these hide the risk they respond to.
+- **Labelling bias:** only patients whose electrolytes were rechecked have a label. Rows without a label are dropped and counted in the run warnings; they are mostly the patients clinicians judged low-risk.
+
+## Malnutrition-related prolonged stay (`malnutrition-prolonged-stay-risk`)
+- **Purpose:** estimate which admitted patients will stay longer than an agreed threshold, from nutrition status and context known at admission, to prioritise early nutrition support. A positive result means *review nutrition early*.
+- **Label:** length of stay above a threshold fixed before training and applied to every row (for example more than 7 days), not a cut-off derived from this dataset. Decide how in-hospital deaths and transfers are handled; leaving them out is simplest.
+- **Leakage guard:** length of stay and the days it is counted in, discharge date, weight, destination or diagnosis, readmission, death, and complications during the stay are **refused as features**. Short names such as `los` match whole words only.
+- **Allowed with a warning:** nutrition care given during the stay (dietitian review, supplements, tube or parenteral feeding). A longer stay gives more time for it to happen, so it can look predictive only because it takes time.
+- **Casemix:** stays differ by ward and diagnosis, so include them as features or train per ward.
+
+## Malnutrition-related readmission (`malnutrition-readmission-risk`)
+- **Purpose:** estimate which patients are at risk of unplanned readmission within 30 days of discharge, from nutrition status and context known at discharge, to target nutrition follow-up. A positive result means *arrange nutrition follow-up*.
+- **Label:** unplanned readmission within 30 days of the discharge date, counted the same way for every row. The cohort is patients discharged alive. Readmission to another facility, or loss to follow-up, makes the label miss events, so say how follow-up was ascertained.
+- **Leakage guard:** anything after discharge (readmission, return or attendance, follow-up weights or visits, death after discharge, emergency visits) is **refused as a feature**.
+- **Different from the stay model on purpose:** length of stay, discharge weight and discharge nutrition status are known at discharge, so they are allowed here and refused for the stay model.
+- **Allowed with a warning:** a supplement, therapeutic food or nutrition plan arranged at discharge, because it is decided by how much at risk the patient looks.
+
+## Weight-loss trajectory (`weight-loss-trajectory`)
+- **Purpose:** estimate which patients will lose a clinically significant amount of weight over a fixed follow-up window, from baseline context. A positive result means *review nutrition early and re-weigh soon*.
+- **Label:** percentage weight change between a baseline weight and the end of a fixed window, the same for every row: for example 5% or more lost within 3 months (yes or no), or bands (under 5%, 5 to under 10%, 10% or more). The window and cut-offs are agreed with the data owner.
+- **Leakage guard:** follow-up and final weights, weight change, velocity or slope, and loss or trajectory flags are **refused as features**.
+- **Timing guard:** weight, BMI, MUAC, cachexia and similar columns are allowed **only if the name says when they were taken** (`baseline_`, `admission_`, `enrolment_`, `prior_`, `previous_`, for example `baseline_weight_kg` or `weight_loss_prior_6m_pct`). Loss before baseline is a legitimate feature; a bare `weight_3m_kg` is refused.
+- **Allowed with a warning:** nutrition counselling, supplements or other care given during the window.
+- **Attrition:** patients who die or are lost before the end weight have no label. Dropping them removes the fastest losers; the run reports how many were dropped.
+- **Naming:** the platform's weight-change outcome model (`nutritional-outcome-prediction`, regression) is separate; this one is a classification of a fixed-window loss.
 
 ## Exploration (unsupervised analysis)
 - **A separate type, not a model.** An *exploration* looks for groups of similar rows (**clustering**, k-means) and unusual rows (**anomaly detection**, isolation forest) in a de-identified dataset version. There is no target column and no catalogue model. It is for understanding data and checking data quality.

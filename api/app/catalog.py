@@ -30,6 +30,18 @@ CATALOG = [
      "Estimate which school-age children and adolescents (5 to 19 years) are at risk of overweight, from household, diet and activity context."),
     ("school-age-stunting-risk", "Adolescent / school-age stunting risk", "classification",
      "Estimate which school-age children and adolescents (5 to 19 years) are at risk of stunting, from household, diet and early-life context."),
+    ("refeeding-syndrome-risk", "Refeeding syndrome risk", "classification",
+     "Estimate which patients are at risk of refeeding syndrome when nutrition support is started, from what is known before the first feed, "
+     "so that electrolytes can be checked and feeding started with care."),
+    ("malnutrition-prolonged-stay-risk", "Malnutrition-related prolonged hospital stay", "classification",
+     "Estimate which admitted patients are likely to stay in hospital longer than an agreed threshold, from admission nutrition status and context, "
+     "to prioritise early nutrition support."),
+    ("malnutrition-readmission-risk", "Malnutrition-related readmission", "classification",
+     "Estimate which patients are at risk of unplanned readmission within 30 days of discharge, from nutrition status and context known at discharge, "
+     "to target nutrition follow-up."),
+    ("weight-loss-trajectory", "Weight-loss trajectory", "classification",
+     "Estimate which patients are likely to lose a clinically significant amount of weight over a fixed follow-up window, from baseline context, "
+     "so that nutrition care can start early."),
     ("ckd-nutrition-risk", "CKD nutrition risk", "classification",
      "Estimate nutrition risk in patients with chronic kidney disease."),
     ("hospital-malnutrition-risk", "Hospital malnutrition risk", "classification",
@@ -110,6 +122,58 @@ LABEL_NOTES = {
     ),
 }
 
+LABEL_NOTES.update({
+    "refeeding-syndrome-risk": (
+        "Label from measured electrolytes after nutrition support is started or substantially increased, using one definition for every row: "
+        "for example the ASPEN 2020 consensus criteria (a fall in serum phosphate, potassium or magnesium of 10% or more from the pre-feeding value "
+        "within 5 days of starting or increasing energy provision, graded by size of fall and organ dysfunction), or the definition the data owner "
+        "agrees. Use one population per dataset: adults and children (including severe acute malnutrition on F-75 or RUTF) use different definitions "
+        "and must not be mixed. Only patients whose electrolytes were rechecked have a label; leaving out those never rechecked removes the "
+        "patients clinicians judged low-risk, so say how many were dropped. Features must be known before the first feed: BMI, weight loss over the "
+        "last 3 to 6 months, days of little or no intake, alcohol or chemotherapy or diuretic or insulin use, HIV, TB, cancer, route of feeding, and "
+        "electrolytes measured before feeding. Electrolytes must be named as baseline (for example baseline_phosphate): a column that does not say it "
+        "was measured before feeding is refused, because the same measurement taken after feeding is the label. Values after feeding starts, the "
+        "nadir or fall in any electrolyte, electrolyte replacement, the diagnosis itself and its complications must never be used as features. "
+        "How fast feeding was started and thiamine given in advance are allowed with a warning: clinicians feed high-risk patients more slowly, so "
+        "they hide the risk they respond to. A positive result means 'check electrolytes and start feeding with care', never 'has refeeding syndrome'."
+    ),
+    "malnutrition-prolonged-stay-risk": (
+        "Label from the recorded length of stay (admission to discharge) being above a threshold fixed before training and applied to every row, for example "
+        "more than 7 days or above the 75th percentile of the ward's earlier stays, not a cut-off worked out from this dataset. Decide how in-hospital "
+        "deaths and transfers are handled (leaving them out of the cohort is the simplest, and the run reports how many rows were dropped): a patient who "
+        "dies early has a short stay and would otherwise look like a good outcome. Stays differ by ward and diagnosis, so include them as features or "
+        "train per ward. Features must be known at admission: age, sex, admission diagnosis group, route of admission, comorbidity, HIV, admission "
+        "screening result (MUST, NRS-2002 or similar), BMI or MUAC, recent weight loss, albumin and intake before admission. Length of stay and the "
+        "days it is counted in, discharge date, weight, destination or diagnosis, readmission, death and complications during the stay must never be used "
+        "as features. Nutrition care given during the stay (dietitian review, supplements, tube or parenteral feeding) is allowed with a warning: a longer "
+        "stay gives more time for it to happen, so it can look predictive only because it takes time. A positive result means 'review nutrition early', "
+        "never 'the patient will stay long'."
+    ),
+    "malnutrition-readmission-risk": (
+        "Label from an unplanned readmission within 30 days of the discharge date (any cause, or the cause the data owner agrees), counted the same way for "
+        "every row. The cohort is patients discharged alive: in-hospital deaths cannot be readmitted and are left out, and planned readmissions are not "
+        "counted. A patient with no readmission record is only a 'no' if follow-up is known to be complete for 30 days: readmission to another facility "
+        "or loss to follow-up makes the label miss events, which flatters the model, so say how follow-up was ascertained. Features are known at "
+        "discharge: length of stay, nutrition status and weight at discharge, diagnosis, comorbidity, HIV, earlier admissions, discharge destination, "
+        "household food security, distance to the facility and the nutrition plan at discharge. Anything that happens after discharge (readmission, return "
+        "or attendance, follow-up weights or visits, death after discharge, emergency visits) must never be used as features. A supplement, "
+        "therapeutic food or review arranged at discharge is allowed with a warning: it is decided because the patient looked at risk, so treated patients can "
+        "look low-risk. A positive result means 'arrange nutrition follow-up', never 'the patient will be readmitted'."
+    ),
+    "weight-loss-trajectory": (
+        "Label from the percentage weight change between a baseline weight and a weight at the end of a fixed window, measured the same way and over the same "
+        "window for every row: for example 5% or more lost within 3 months (yes or no), or bands such as under 5%, 5 to under 10% and 10% or more. "
+        "The window and the cut-offs are agreed with the data owner before training. Patients who die or are lost before the end weight have no label: "
+        "leaving them out removes the fastest losers, so the run reports how many rows were dropped and the result must be read with that in mind. "
+        "Features must be known at baseline: age, sex, diagnosis and stage, HIV or TB status, treatment plan, appetite, symptoms such as nausea or "
+        "difficulty swallowing, intake, food security and loss before baseline. Every weight, BMI, MUAC or cachexia column must say when it was taken "
+        "(baseline, admission, enrolment, initial, prior or previous, for example weight_loss_prior_6m_pct): a column that does not is refused, because "
+        "the same measurement at follow-up is the label. Follow-up and final weights, weight change, velocity or slope, and any loss or trajectory "
+        "flag must never be used as features. Nutrition care given during the window is allowed with a warning. A positive result means 'review nutrition "
+        "early and re-weigh soon', never a diagnosis."
+    ),
+})
+
 # Column-name words that may not be features for a model (they define or reveal its label). Whole words, split on
 # anything that is not a letter or digit, plus the run-together forms in LEAKAGE_SUBSTRINGS.
 LEAKAGE_TOKENS = {
@@ -165,6 +229,81 @@ LEAKAGE_WARN_NOTES = {
         "'{col}' is only known at or after delivery. It is allowed only if this model is meant to be used at birth. For antenatal use, "
         "leave it out: it carries a large part of the signal, so scores overstate how well the model works during pregnancy. "
         "Train the same model with it excluded and compare."
+    ),
+}
+
+LEAKAGE_TOKENS.update({
+    "refeeding-syndrome-risk": {"rfs", "d1", "d2", "d3", "d4", "d5", "d7", "h24", "h48", "h72", "24h", "48h", "72h"},
+    "malnutrition-prolonged-stay-risk": {"los", "alos", "dod", "died", "dead"},
+    "malnutrition-readmission-risk": {"died", "dead"},
+    "weight-loss-trajectory": {"died", "dead"},
+})
+LEAKAGE_SUBSTRINGS.update({
+    "refeeding-syndrome-risk": ("refeedingsyndrome", "refeedinghypo", "refeedingcomplication", "refeedingevent", "refeedingoutcome", "refeedingdiagnos",
+                                "nadir", "postfeed", "afterfeed", "duringfeed", "followup", "day1", "day2", "day3", "day4", "day5", "day7",
+                                "replacement", "repletion", "replete", "ivphosphate", "ivpotassium", "ivmagnesium", "electrolytedrop",
+                                "electrolytefall", "electrolytechange", "organdysfunction", "cardiacarrest", "arrhythm"),
+    "malnutrition-prolonged-stay-risk": ("lengthofstay", "staylength", "stayduration", "daysinhospital", "daysadmitted", "hospitalstay", "prolonged",
+                                         "longstay", "discharge", "readmi", "mortality", "death", "deceased", "complication", "nosocomial",
+                                         "hospitalacquired", "duringstay", "instay", "inhospital"),
+    "malnutrition-readmission-risk": ("readmi", "reattend", "returnvisit", "returnedto", "daystoreturn", "postdischarge", "afterdischarge",
+                                      "followupweight", "followupvisit", "followupattend", "attendedfollowup", "followupdate", "followupoutcome",
+                                      "followupresult", "followupstatus", "lostto", "mortality", "death", "deceased", "emergencyvisit"),
+    "weight-loss-trajectory": ("followup", "finalweight", "endweight", "outcomeweight", "weightchange", "percentchange", "pctchange", "deltaweight",
+                               "weightdelta", "velocity", "slope", "trajectory", "lossflag", "significantloss", "severeloss", "lostweight",
+                               "mortality", "death", "deceased"),
+})
+LEAKAGE_WARN_SUBSTRINGS.update({
+    "refeeding-syndrome-risk": ("thiamine", "prophyla", "startingenergy", "startingkcal", "initialenergy", "initialkcal", "kcalkg", "feedingrate",
+                                "slowstart", "energyrestrict"),
+    "malnutrition-prolonged-stay-risk": ("dietitian", "dietician", "nutritionreferral", "nutritionsupport", "nutritionalsupport", "nutritionconsult",
+                                         "nutritionreview", "oralnutritionalsuppl", "tubefeed", "enteralfeed", "parenteral", "feedingstarted",
+                                         "supplementstarted", "ons"),
+    "malnutrition-readmission-risk": ("supplement", "rutf", "therapeuticfood", "nutritionplan", "nutritionreferral", "nutritionreview", "ons"),
+    "weight-loss-trajectory": ("counsel", "intervention", "supplement", "dietitian", "dietician", "rutf", "appetitestimul", "ons"),
+})
+LEAKAGE_WARN_NOTES.update({
+    "refeeding-syndrome-risk": (
+        "'{col}' records a decision taken because a patient looked at risk (how fast feeding was started, or thiamine given in advance), and it also "
+        "changes what happens next. Patients judged high-risk are fed more slowly, which lowers their observed risk, so the model can learn that "
+        "cautious feeding means 'low risk'. Do not read it as a causal effect, and compare with a run that leaves it out."
+    ),
+    "malnutrition-prolonged-stay-risk": (
+        "'{col}' records nutrition care that happens during the stay. A longer stay gives more time for it to happen, so it can look like a predictor "
+        "of long stays simply because it takes time. It is only sound if it is always recorded at the same early point (for example within 24 hours "
+        "of admission). Train the same model without it and compare."
+    ),
+    "malnutrition-readmission-risk": (
+        "'{col}' records support arranged at discharge. It is decided because the patient looked at risk, and it also changes what happens next, so "
+        "treated patients can look low-risk. Do not read it as the effect of that support, and compare with a run that leaves it out."
+    ),
+    "weight-loss-trajectory": (
+        "'{col}' records nutrition care or treatment given during the follow-up window, after baseline. It is a response to expected weight loss and "
+        "also changes it, so it makes the scores hard to interpret. Use it only if the model will run after that care has been decided, and compare "
+        "with a run that leaves it out."
+    ),
+})
+
+# Measurements that are a legitimate baseline feature or the label itself depending on when they were taken. For these models a column is refused
+# unless its name states the timing (one of TIMING_MARKERS), so the user has to say so; short markers match whole words only.
+TIMING_REQUIRED = {
+    "refeeding-syndrome-risk": ("phosphate", "phosphorus", "po4", "potassium", "magnesium", "hypokal", "hypophos", "hypomag", "electrolyte"),
+    "weight-loss-trajectory": ("weight", "bmi", "muac", "armcirc", "midarm", "skinfold", "cachexia", "sarcopenia", "wasting"),
+}
+TIMING_MARKERS = {
+    "refeeding-syndrome-risk": ("baseline", "admission", "prefeed", "prefeeding", "beforefeed", "beforefeeding", "initial", "screening", "enrol", "pre"),
+    "weight-loss-trajectory": ("baseline", "admission", "enrol", "initial", "prior", "previous", "usual", "screening", "entry", "pre"),
+}
+TIMING_NOTES = {
+    "refeeding-syndrome-risk": (
+        "'{col}' is an electrolyte value or condition and does not say when it was measured. Only values taken before feeding started can be features: "
+        "the same measurement after feeding is the label. Name it so that it says so (baseline_, admission_ or prefeeding_, for example "
+        "baseline_phosphate) or exclude it, and run again."
+    ),
+    "weight-loss-trajectory": (
+        "'{col}' is a weight or body-size measure and does not say when it was taken. Only baseline values, or loss before baseline, can be features: "
+        "the same measurement at follow-up is the label. Name it so that it says so (baseline_, admission_, enrolment_, prior_ or previous_, for example "
+        "baseline_weight_kg or weight_loss_prior_6m_pct) or exclude it, and run again."
     ),
 }
 

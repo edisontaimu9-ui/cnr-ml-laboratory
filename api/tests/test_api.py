@@ -38,7 +38,7 @@ def test_auth_required(client):
 
 def test_overview_and_catalog(client):
     ov = client.get("/v1/overview", headers=ADMIN).json()
-    assert ov["counts"]["model_definitions"] == 14
+    assert ov["counts"]["model_definitions"] == 18
     assert ov["counts"]["deployed_models"] == 0
     assert "never confirmed diagnoses" in ov["safety_notice"]
     cat = client.get("/v1/catalog", headers=ADMIN).json()

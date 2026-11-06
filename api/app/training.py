@@ -85,6 +85,9 @@ class Config:
     leakage_exempt: list[str] = field(default_factory=list)      # name parts that make a column NOT count as leaky (see catalog.py)
     warn_substrings: list[str] = field(default_factory=list)     # label-definition features that are allowed but warned about
     warn_note: str = ""                                          # reason shown for them; "" = the label-definition text
+    timing_required: list[str] = field(default_factory=list)     # name parts of measurements that are only allowed if their timing is stated
+    timing_markers: list[str] = field(default_factory=list)      # name parts that state it (e.g. baseline, admission, prior)
+    timing_note: str = ""                                        # reason shown when a timing-required column has no marker
     calibration: str = "none"                  # logistic only: none | sigmoid | isotonic (recalibration is opt-in, see _calibration_verdict)
 
 
@@ -103,6 +106,17 @@ def _is_leaky(col: str, cfg: Config) -> bool:
     if any(x in flat for x in cfg.leakage_exempt):      # e.g. mother's BMI or birth weight are not the child's own measurement
         return False
     return bool(words & set(cfg.leakage_tokens)) or any(_name_hit(sub, words, flat) for sub in cfg.leakage_substrings)
+
+
+def _untimed(col: str, cfg: Config) -> bool:
+    """A measurement whose column name does not say when it was taken. For some models the same measurement (an electrolyte,
+    a weight) is a legitimate baseline feature or the label itself, depending on timing, so an unlabelled one is refused."""
+    if not cfg.timing_required:
+        return False
+    words, flat = _name_parts(col)
+    if not any(_name_hit(sub, words, flat) for sub in cfg.timing_required):
+        return False
+    return not any(_name_hit(m, words, flat) for m in cfg.timing_markers)
 
 
 def _prepare(df: pd.DataFrame, cfg: Config, warnings: list[str]):
@@ -124,7 +138,11 @@ def _prepare(df: pd.DataFrame, cfg: Config, warnings: list[str]):
     banned = [c for c in cand if _is_leaky(c, cfg)]
     if banned:
         raise TrainingError(f"'{banned[0][:60]}' defines or reveals this model's label and cannot be a feature. "
-                            "Exclude it (and any other blood pressure or diagnosis columns) and run again.")
+                            "Exclude it (and any similar columns) and run again.")
+    untimed = [c for c in cand if _untimed(c, cfg)]
+    if untimed:
+        raise TrainingError(cfg.timing_note.format(col=untimed[0][:60]) if cfg.timing_note else
+                            f"'{untimed[0][:60]}' does not say when it was measured. Name it so that it does, or exclude it, and run again.")
     overlap = [c for c in cand if any(_name_hit(sub, *_name_parts(c)) for sub in cfg.warn_substrings)
                and not any(x in _name_parts(c)[1] for x in cfg.leakage_exempt)]
     if overlap:

@@ -9,7 +9,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .. import audit, storage, training
-from ..catalog import LEAKAGE_EXEMPT, LEAKAGE_SUBSTRINGS, LEAKAGE_TOKENS, LEAKAGE_WARN_NOTES, LEAKAGE_WARN_SUBSTRINGS
+from ..catalog import (LEAKAGE_EXEMPT, LEAKAGE_SUBSTRINGS, LEAKAGE_TOKENS, LEAKAGE_WARN_NOTES, LEAKAGE_WARN_SUBSTRINGS,
+                       TIMING_MARKERS, TIMING_NOTES, TIMING_REQUIRED)
 from ..jobs import STALE_MINUTES, another_job_running
 from ..db import SessionLocal, get_db
 from ..models import DatasetVersion, Experiment, ModelDefinition, utcnow
@@ -91,7 +92,10 @@ def create_experiment(body: ExperimentCreate, request: Request, background: Back
                           leakage_substrings=list(LEAKAGE_SUBSTRINGS.get(d.slug, ())),
                           warn_substrings=list(LEAKAGE_WARN_SUBSTRINGS.get(d.slug, ())),
                           warn_note=LEAKAGE_WARN_NOTES.get(d.slug, ""),
-                          leakage_exempt=list(LEAKAGE_EXEMPT.get(d.slug, ())))
+                          leakage_exempt=list(LEAKAGE_EXEMPT.get(d.slug, ())),
+                          timing_required=list(TIMING_REQUIRED.get(d.slug, ())),
+                          timing_markers=list(TIMING_MARKERS.get(d.slug, ())),
+                          timing_note=TIMING_NOTES.get(d.slug, ""))
     e = Experiment(model_definition_id=d.id, dataset_version_id=v.id, framework=body.algorithm, status="queued",
                    params_json={"config": asdict(cfg), "dataset_id": v.dataset_id, "dataset_version": v.version,
                                 "model_slug": d.slug},
