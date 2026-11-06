@@ -132,7 +132,7 @@ LEXICON_DIR = Path(__file__).parent / "lexicons"
 LANGS = {
     "en": {"name": "English", "support": "Terminology lists and patterns."},
     "ny": {"name": "Chichewa", "support": "Terminology lists; only the listed word forms are found."},
-    "tum": {"name": "Tumbuka", "support": "Framework and a very small seed list. Needs terms from Tumbuka speakers (lexicons/tum.csv)."},
+    "tum": {"name": "Tumbuka", "support": "A small unreviewed starter list (foods and a few symptoms). Needs clinical terms from Tumbuka speakers (lexicons/tum.csv)."},
     "yao": {"name": "Yao (Chiyao)", "support": "Framework only, no terms yet. Needs terms from Yao speakers (lexicons/yao.csv)."},
 }
 ENTRY_LANGS = {"en", "ny", "both", "tum", "yao"}       # "both" means English and Chichewa

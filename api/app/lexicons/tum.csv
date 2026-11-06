@@ -1,5 +1,25 @@
 term,norm,label,group,lang,case_sensitive
-# Tumbuka seed terms. Add more rows from Tumbuka speakers.
+# Tumbuka terms. All unreviewed: a Tumbuka speaker or clinician should check spellings and meanings before use.
+# Starter terms (first three) were written by the developers.
 Ŵana,child,POPULATION,age or state,tum,
 somba,fish,FOOD,animal source,tum,
 ufwa,flour,FOOD,cereal,tum,
+# Taken from "Chitumbuka Vocabulary: Volume 1" (Engineers Without Borders Canada, D. McNicholl, July 2010).
+# The author notes that some entries may be wrong and that spellings vary, so treat these as unconfirmed.
+# Words that Chichewa shares (nyama, mpunga, mchere, nkhuku, malungo) are left out: they are already matched as Chichewa.
+nchunga,beans,FOOD,legume,tum,
+shawa,groundnuts,FOOD,legume,tum,
+ufu,flour,FOOD,cereal,tum,
+ngoma,maize,FOOD,cereal,tum,
+dowe,green maize,FOOD,cereal,tum,
+tiligu,wheat,FOOD,cereal,tum,
+kondowole,cassava flour,FOOD,root or tuber,tum,
+mukaka,milk,FOOD,dairy,tum,
+jungu,pumpkin,FOOD,vegetable,tum,
+dende,relish,FOOD,relish,tum,
+maji,water,FOOD,drink,tum,
+mowa,beer,FOOD,drink,tum,
+phele,beer,FOOD,drink,tum,
+phuzu,fever,SYMPTOM,sign or symptom,tum,
+chilonda,sore,SYMPTOM,sign or symptom,tum,
+munkhwala,medicine,INTERVENTION,supplement or drug,tum,

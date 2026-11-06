@@ -213,6 +213,17 @@ def test_tumbuka_seed_terms_and_language():
     assert nlp_lab.analyze("Mwana akudya nsima koma sakudya nyama.")["language"]["overall"] == "ny"   # Chichewa is not mistaken for Tumbuka
 
 
+def test_tumbuka_starter_terms_do_not_clash_with_chichewa_and_are_found():
+    from app import nlp_lexicon as lx
+    ents_ = lx.entries()
+    tum = {e["term"].lower() for e in ents_ if e["lang"] == "tum"}
+    other = {e["term"].lower() for e in ents_ if e["lang"] != "tum"}
+    assert not tum & other                                          # a term in two languages would overwrite its twin in the matcher
+    r = nlp_lab.analyze("Mwana wakulya nchunga na mukaka, kweni ali na phuzu.")
+    assert {(e["norm"], e["lang"]) for e in r["entities"] if e["label"] != "POPULATION"} >= {("beans", "tum"), ("milk", "tum"), ("fever", "tum")}
+    assert nlp_lab.analyze("Mwana akudya nsima koma sakudya nyama.")["language"]["overall"] == "ny"
+
+
 def test_csv_lexicon_loader_accepts_good_rows_and_reports_bad_ones(tmp_path):
     from app import nlp_lexicon as lx
     (tmp_path / "yao.csv").write_text("# comment\nterm,norm,label,group,lang,case_sensitive\n"
@@ -235,5 +246,6 @@ def test_shipped_lexicon_files_have_no_errors_and_yao_is_empty(client):
     assert info["lexicon_file_errors"] == []
     assert {x["code"] for x in info["languages"]} == {"en", "ny", "tum", "yao"}
     assert client.get("/v1/nlp/lexicon?lang=yao", headers=ADMIN).json()["total"] == 0
-    assert client.get("/v1/nlp/lexicon?lang=tum", headers=ADMIN).json()["total"] == 3
+    tum = client.get("/v1/nlp/lexicon?lang=tum&limit=500", headers=ADMIN).json()
+    assert tum["total"] >= 19 and {"Ŵana", "somba", "ufwa", "nchunga", "phuzu"} <= {t["term"] for t in tum["terms"]}
     assert client.get("/v1/nlp/lexicon?lang=ny&limit=500", headers=ADMIN).json()["total"] > 100

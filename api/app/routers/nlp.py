@@ -25,7 +25,7 @@ _limiter = SlidingWindow(get_settings().rate_limit_predict_per_min, 60)
 
 NOTICE = ("Rule-based extraction: it reports what the text says and makes no diagnosis or nutrition-status decision. Terminology lists "
           "are developer-written and not yet clinically reviewed; terms that are not listed are not found. Chichewa, Tumbuka and Yao support covers listed "
-          "words only (Tumbuka has a tiny seed list, Yao none yet). Text is not stored. Do not submit identifiable patient notes.")
+          "words only (Tumbuka has a small unreviewed starter list, Yao none yet). Text is not stored. Do not submit identifiable patient notes.")
 
 
 class AnalyzeRequest(BaseModel):
