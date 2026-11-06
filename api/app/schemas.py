@@ -336,3 +336,45 @@ class MatchingCandidate(MatchingEvaluate):
 class MatchSuggest(BaseModel):
     queries: list[Annotated[str, Field(min_length=1, max_length=120)]] = Field(min_length=1, max_length=50)
     top_k: int = Field(default=5, ge=1, le=10)
+
+
+NoteSubject = Literal["general", "dataset", "dataset_version", "experiment", "exploration", "hotspot", "model", "model_version"]
+NoteKind = Literal["note", "decision", "finding", "lesson", "warning", "question"]
+
+
+class NoteCreate(BaseModel):
+    subject_type: NoteSubject = "general"
+    subject_id: str | None = Field(default=None, max_length=60)
+    kind: NoteKind = "note"
+    title: str = Field(min_length=2, max_length=160)
+    body: str = Field(min_length=1, max_length=4000)
+    tags: list[str] = Field(default_factory=list, max_length=8)
+    pinned: bool = False
+
+
+class NoteUpdate(BaseModel):
+    kind: NoteKind | None = None
+    title: str | None = Field(default=None, min_length=2, max_length=160)
+    body: str | None = Field(default=None, min_length=1, max_length=4000)
+    tags: list[str] | None = Field(default=None, max_length=8)
+    pinned: bool | None = None
+
+
+class NoteOut(BaseModel):
+    id: int
+    subject_type: str
+    subject_id: str | None = None
+    kind: str
+    title: str
+    body: str
+    tags: list[str] = []
+    pinned: bool = False
+    created_by: str | None = None
+    created_at: UTC
+    updated_at: UTC
+    archived_at: UTC = None
+    edits: int = 0
+
+
+class NoteHistoryOut(NoteOut):
+    history: list[dict[str, Any]] = []

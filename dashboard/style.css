@@ -106,3 +106,8 @@ body.busy #topbar{opacity:1;transition-delay:.2s}
 button.loading{position:relative;pointer-events:none;opacity:.85}
 button.loading::after{content:"";display:inline-block;width:.9em;height:.9em;margin-left:.55rem;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:spin .7s linear infinite;vertical-align:-.1em}
 @media (prefers-reduced-motion:reduce){.spinner,button.loading::after,#topbar::before{animation-duration:2.5s}}
+
+.note.pinned{border-left:4px solid var(--maize)}
+.notebody{white-space:pre-wrap;overflow-wrap:anywhere}
+.noteform label{display:block;margin-top:.5rem}
+.noteform textarea{resize:vertical}

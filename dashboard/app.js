@@ -66,6 +66,7 @@
     { id: "predict", label: "Predict", perm: "predict:models", render: predictPage },
     { id: "registry", label: "Registry", perm: "read:models", render: registry },
     { id: "datasets", label: "Datasets", perm: "read:datasets", render: datasets },
+    { id: "notes", label: "Notes", perm: "read:notes", render: notesPage },
     { id: "integration", label: "CNR integration", perm: "read:integration", render: integrationPage },
     { id: "audit", label: "Audit log", perm: "read:audit", render: audit },
     { id: "access", label: "Access", perm: "manage:keys", render: access },
@@ -264,6 +265,7 @@
       h("div", { class: "row" }, h("h1", null, "Experiment #" + e.id), statusBadge(e.status)),
       h("p", { class: "muted" }, (e.model_name || "") + " · dataset " + (e.params_json.dataset_id || "?") + " v" + (e.params_json.dataset_version || "?") + " · target " + (cfg.target || "?") +
         " · " + (m.algorithm === "logistic" ? "logistic regression, C " + ((m.model_settings || {}).C || "?") + ", " + (((m.model_settings || {}).calibration || "none") === "none" ? "no recalibration" : (m.model_settings.calibration + " recalibration")) : m.algorithm === "mlp" ? "neural network " + ((m.model_settings || {}).hidden_layers || []).join("-") + ", " + ((m.model_settings || {}).iterations_used || "?") + " iterations" : (cfg.n_estimators || "?") + " trees, depth " + (cfg.max_depth || "?")) + " · started " + fmt(e.created_at) + " by " + (e.created_by || "—"))];
+    out.push(notesPanel("experiment", id));
     if (e.status === "queued" || e.status === "running") {
       out.push(h("div", { class: "notice" }, "Training is running. This page refreshes by itself."));
       poll = setTimeout(() => { if (location.hash.slice(1) === "experiments/" + id) show("experiments/" + id, true); }, 2500);
@@ -424,6 +426,7 @@
     const out = [h("p", null, h("button", { class: "link", onclick: () => { location.hash = "explorations"; } }, "← All explorations")),
       h("div", { class: "row" }, h("h1", null, "Exploration #" + x.id), xpBadge(), statusBadge(x.status)),
       h("p", { class: "muted" }, "Dataset " + (pr.dataset_id || "?") + " v" + (pr.dataset_version || "?") + " · " + (cfg.methods || []).join(" + ") + " · started " + fmt(x.created_at) + " by " + (x.created_by || "—") + (pr.note ? " · " + pr.note : ""))];
+    out.push(notesPanel("exploration", id));
     if (x.status === "queued" || x.status === "running") {
       out.push(h("div", { class: "notice" }, "The analysis is running. This page refreshes by itself."));
       poll = setTimeout(() => { if (location.hash.slice(1) === "explorations/" + id) show("explorations/" + id, true); }, 2500);
@@ -768,6 +771,7 @@
     const out = [h("p", null, h("button", { class: "link", onclick: () => { location.hash = "hotspots"; } }, "← All hotspot analyses")),
       h("div", { class: "row" }, h("h1", null, "Hotspot analysis #" + x.id), hsBadge(), statusBadge(x.status)),
       h("p", { class: "muted" }, "Dataset " + (pr.dataset_id || "?") + " v" + (pr.dataset_version || "?") + " · started " + fmt(x.created_at) + " by " + (x.created_by || "—") + (pr.note ? " · " + pr.note : ""))];
+    out.push(notesPanel("hotspot", id));
     if (x.status === "queued" || x.status === "running") {
       out.push(h("div", { class: "notice" }, "The analysis is running. This page refreshes by itself."));
       poll = setTimeout(() => { if (location.hash.slice(1) === "hotspots/" + id) show("hotspots/" + id, true); }, 2500);
@@ -1036,6 +1040,7 @@
       h("div", { class: "row" }, h("h1", null, (v.model_name || v.model_slug) + " · v" + v.version), vBadge(v.status)),
       h("p", { class: "muted" }, (isMatch ? "Food-name matching evaluation" : "Experiment #" + v.experiment_id) + " · registered by " + (v.created_by || "—") + " on " + fmt(v.created_at) + (v.artifact_sha256 ? " · file SHA-256 " + v.artifact_sha256.slice(0, 12) + "…" : "")),
       h("div", { class: "notice" }, "Intended use: " + (v.intended_use || "—") + " " + (isMatch ? "Output is a list of suggestions for a person to confirm, never an automatic assignment." : "Outputs are risk estimates to support clinical judgement, never confirmed diagnoses."))];
+    out.push(notesPanel("model_version", id));
     (m.warnings || []).forEach((w) => out.push(h("div", { class: "notice" }, w)));
     const stat = (l, x, sub) => h("div", { class: "stat" }, h("b", null, x), h("span", null, l + (sub ? " · " + sub : "")));
     out.push(h("h2", null, "Evaluation (frozen at registration)"));
@@ -1130,6 +1135,7 @@
     const out = [h("p", null, h("button", { class: "link", onclick: () => { location.hash = "datasets"; } }, "← All datasets")),
       h("h1", null, d.name), h("p", null, d.description || "No description."),
       h("p", { class: "muted" }, "Sensitivity: " + d.sensitivity + " · created by " + (d.created_by || "—") + " on " + fmt(d.created_at))];
+    out.push(notesPanel("dataset", id));
     if (can("write:datasets")) out.push(uploadWizard(d));
     out.push(h("h2", null, "Versions"));
     out.push(d.versions.length ? d.versions.map((v) => versionCard(d, v)) : empty("No versions yet", "Upload a file to create version 1."));
@@ -1261,6 +1267,109 @@
     refreshTable().catch((e) => holder.replaceChildren(h("div", { class: "notice" }, e.message)));
     return [h("h1", null, "Access"), h("p", null, "Each person or service gets its own key and role. Revoke a key as soon as it is no longer needed."),
       h("div", { class: "inline" }, h("div", null, h("label", { for: "kn" }, "Key name"), name), h("div", null, h("label", { for: "kr" }, "Role"), role), create), err, out, holder];
+  }
+
+  // ---------- Notes: laboratory memory. People record decisions, findings, lessons and warnings next to the thing they are about. ----------
+  // Notes hold words only (the API refuses emails, phone and ID numbers). Archived notes are kept but hidden.
+  const NOTE_KINDS = ["note", "decision", "finding", "lesson", "warning", "question"];
+  const NOTE_SUBJECTS = { general: "Whole lab", dataset: "Dataset", dataset_version: "Dataset version", experiment: "Experiment", exploration: "Exploration", hotspot: "Hotspot analysis", model: "Model", model_version: "Model version" };
+  const NOTE_LINKS = { dataset: "datasets/", experiment: "experiments/", exploration: "explorations/", hotspot: "hotspots/", model_version: "registry/" };
+  let noteSeq = 0;
+
+  function noteForm(init, onSave, onCancel) {
+    const n = ++noteSeq, v = init || {};
+    const kind = h("select", { id: "nk" + n }, NOTE_KINDS.map((k) => h("option", { value: k, selected: k === (v.kind || "note") }, k)));
+    const title = h("input", { id: "nt" + n, type: "text", maxlength: "160", value: v.title || "", autocomplete: "off" });
+    const body = h("textarea", { id: "nb" + n, rows: "4", maxlength: "4000" }, v.body || "");
+    const tags = h("input", { id: "ng" + n, type: "text", maxlength: "200", value: (v.tags || []).join(", "), autocomplete: "off", placeholder: "e.g. leakage, data quality" });
+    const pin = h("input", { id: "np" + n, type: "checkbox", checked: !!v.pinned });
+    const err = h("p", { class: "error", role: "alert" });
+    const save = h("button", { class: "primary", onclick: async () => {
+      err.textContent = "";
+      try { await onSave({ kind: kind.value, title: title.value, body: body.value, tags: tags.value.split(",").map((x) => x.trim()).filter(Boolean), pinned: pin.checked }); }
+      catch (e) { err.textContent = e.message; }
+    } }, v.id ? "Save changes" : "Save note");
+    return h("div", { class: "card noteform" },
+      h("div", { class: "inline" }, h("div", null, h("label", { for: "nt" + n }, "Title"), title), h("div", null, h("label", { for: "nk" + n }, "Type"), kind), h("span")),
+      h("label", { for: "nb" + n }, "What should the lab remember?"), body,
+      h("label", { for: "ng" + n }, "Tags (comma separated, optional)"), tags,
+      h("p", null, h("label", null, pin, " Pin: show this note on every page and to the assistant first")),
+      h("p", { class: "muted" }, "Words only. Do not paste patient data, names, phone or ID numbers."),
+      h("p", null, save, " ", onCancel ? h("button", { class: "link", onclick: onCancel }, "Cancel") : null), err);
+  }
+
+  function noteCard(n, reload, showSubject) {
+    const mine = me && (me.role === "admin" || me.name === n.created_by) && can("write:notes") && !n.archived_at;
+    const card = h("div", { class: "card note" + (n.pinned ? " pinned" : "") });
+    const view = () => {
+      const subj = showSubject && n.subject_type !== "general"
+        ? (NOTE_LINKS[n.subject_type] ? h("button", { class: "link", onclick: () => { location.hash = NOTE_LINKS[n.subject_type] + n.subject_id; } }, NOTE_SUBJECTS[n.subject_type] + " " + n.subject_id)
+          : NOTE_SUBJECTS[n.subject_type] + " " + n.subject_id) : (showSubject ? "Whole lab" : null);
+      const hist = h("div");
+      const histBox = n.edits ? h("details", { ontoggle: async (ev) => {
+        if (!ev.target.open || hist.childNodes.length) return;
+        try { const d = await api("/v1/notes/" + n.id); hist.replaceChildren(...d.history.slice().reverse().map((x) => h("div", { class: "notice" }, h("b", null, x.title), h("p", { class: "notebody" }, x.body), h("small", null, "Earlier wording, replaced " + fmt(x.at) + " by " + x.by)))); }
+        catch (e) { hist.replaceChildren(h("div", { class: "notice" }, e.message)); }
+      } }, h("summary", null, "Earlier wording (" + n.edits + ")"), hist) : null;
+      card.replaceChildren(
+        h("div", { class: "row" }, h("h3", null, n.title), h("span", null, h("span", { class: "badge " + (n.kind === "warning" ? "watch" : n.kind === "decision" ? "explore" : "") }, n.kind), n.pinned ? " " : null, n.pinned ? h("span", { class: "badge" }, "pinned") : null, n.archived_at ? " " : null, n.archived_at ? h("span", { class: "badge bad" }, "archived") : null)),
+        h("p", { class: "notebody" }, n.body),
+        h("p", { class: "muted" }, [n.created_by || "—", fmt(n.created_at), n.edits ? "edited " + fmt(n.updated_at) : null, subj, n.tags.length ? n.tags.map((t) => "#" + t).join(" ") : null].filter((x) => x != null).flatMap((x, i) => (i ? [" · ", x] : [x]))),
+        histBox,
+        mine ? h("p", null,
+          h("button", { class: "link", onclick: async () => { try { await api("/v1/notes/" + n.id, { method: "PATCH", body: JSON.stringify({ pinned: !n.pinned }) }); reload(); } catch (e) { alert(e.message); } } }, n.pinned ? "Unpin" : "Pin"), " ",
+          h("button", { class: "link", onclick: () => card.replaceChildren(noteForm(n, async (b) => { await api("/v1/notes/" + n.id, { method: "PATCH", body: JSON.stringify(b) }); reload(); }, view)) }, "Edit"), " ",
+          h("button", { class: "link", onclick: async () => { if (confirm("Archive this note? It is kept but no longer shown.")) { try { await api("/v1/notes/" + n.id, { method: "DELETE" }); reload(); } catch (e) { alert(e.message); } } } }, "Archive")) : null);
+    };
+    view();
+    return card;
+  }
+
+  // Notes for one thing (shown on its page).
+  function notesPanel(stype, sid) {
+    const box = h("div", { class: "notes" });
+    const load = async () => {
+      try {
+        const rows = await api("/v1/notes?subject_type=" + encodeURIComponent(stype) + "&subject_id=" + encodeURIComponent(sid) + "&limit=100");
+        const add = h("div");
+        const addBtn = can("write:notes") ? h("button", { onclick: () => { addBtn.hidden = true; add.replaceChildren(noteForm(null, async (b) => { await api("/v1/notes", { method: "POST", body: JSON.stringify({ ...b, subject_type: stype, subject_id: String(sid) }) }); load(); }, () => { add.replaceChildren(); addBtn.hidden = false; })); } }, "Add a note") : null;
+        box.replaceChildren(h("div", { class: "row" }, h("h2", null, "Lab notes" + (rows.length ? " (" + rows.length + ")" : "")), addBtn), add,
+          ...(rows.length ? rows.map((n) => noteCard(n, load, false)) : [h("p", { class: "muted" }, "Nothing recorded here yet. Decisions, warnings and lessons about this " + (NOTE_SUBJECTS[stype] || "item").toLowerCase() + " go here.")]));
+      } catch (e) { box.replaceChildren(h("div", { class: "notice" }, e.message)); }
+    };
+    load();
+    return box;
+  }
+
+  // The Notes page: everything the lab remembers, with filters and search.
+  async function notesPage() {
+    const f = { q: "", kind: "", subject_type: "", pinned: "", archived: false };
+    const list = h("div");
+    const q = h("input", { id: "nq", type: "search", placeholder: "Search titles and text", maxlength: "80", autocomplete: "off" });
+    const kind = h("select", { id: "nfk" }, [h("option", { value: "" }, "All types"), ...NOTE_KINDS.map((k) => h("option", { value: k }, k))]);
+    const subj = h("select", { id: "nfs" }, [h("option", { value: "" }, "Everything"), ...Object.entries(NOTE_SUBJECTS).map(([k, l]) => h("option", { value: k }, l))]);
+    const arch = h("input", { id: "nfa", type: "checkbox" });
+    const add = h("div");
+    const load = async () => {
+      const p = new URLSearchParams({ limit: "200" });
+      if (q.value.trim()) p.set("q", q.value.trim());
+      if (kind.value) p.set("kind", kind.value);
+      if (subj.value) p.set("subject_type", subj.value);
+      if (arch.checked) p.set("include_archived", "true");
+      try {
+        const rows = await api("/v1/notes?" + p);
+        list.replaceChildren(...(rows.length ? rows.map((n) => noteCard(n, load, true)) : [empty("No notes", "Nothing matches. Add a note, or clear the filters.")]));
+      } catch (e) { list.replaceChildren(h("div", { class: "notice" }, e.message)); }
+    };
+    [kind, subj, arch].forEach((el) => el.addEventListener("change", load));
+    q.addEventListener("keydown", (e) => { if (e.key === "Enter") load(); });
+    const addBtn = can("write:notes") ? h("button", { class: "primary", onclick: () => { addBtn.hidden = true; add.replaceChildren(noteForm(null, async (b) => { await api("/v1/notes", { method: "POST", body: JSON.stringify({ ...b, subject_type: "general" }) }); addBtn.hidden = false; add.replaceChildren(); load(); }, () => { add.replaceChildren(); addBtn.hidden = false; })); } }, "New lab note") : null;
+    await load();
+    return [h("h1", null, "Notes"),
+      h("p", null, "The laboratory's memory: decisions, findings, lessons, warnings and open questions that people have recorded. Notes about one dataset, experiment or model also appear on its own page. Notes here are words only; they never hold patient-level data."),
+      h("p", null, addBtn), add,
+      h("div", { class: "inline" }, h("div", null, h("label", { for: "nq" }, "Search"), q), h("div", null, h("label", { for: "nfk" }, "Type"), kind), h("div", null, h("label", { for: "nfs" }, "About"), subj)),
+      h("p", null, h("label", null, arch, " Show archived")), list];
   }
 
   function table(head, rows) {

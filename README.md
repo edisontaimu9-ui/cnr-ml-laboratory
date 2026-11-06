@@ -200,12 +200,21 @@ It exists to turn nutrition data into usable intelligence for Malawi: research, 
 - **Lab -> CNR events:** when a model is deployed, rolled back or withdrawn, the lab sends CNR a signed webhook (`CNR_WEBHOOK_URL`, `CNR_WEBHOOK_SECRET`; HMAC-SHA256, three attempts, audited as `integration.notify`, no patient data). The CNR side is `chakudya-api` v1.83.0: `GET /ml/status`, `GET /ml/models`, `POST /ml/assess/{slug}` and `POST /hooks/ml-lab`.
 - CNR's own nutrition calculations stay in CNR. The lab pulls no patient records from CNR. It pulls aggregated surveillance counts (see *Automatic surveillance sync*) and, only if you enable it, de-identified, size-suppressed screening rows for model training (see *Automatic training-data sync*), and pushes CNR nothing except signed model-status events.
 
+## Laboratory memory (notes)
+- **What it is:** a written memory for the lab. People record decisions, findings, lessons, warnings and open questions next to the thing they are about, so the reasoning survives staff changes ("why did we drop this column?", "this dataset double counts after the registry change").
+- **Attached to:** a dataset, dataset version, experiment, exploration, hotspot analysis, model, model version, or the whole lab. The subject must exist. A note has a type (`note`, `decision`, `finding`, `lesson`, `warning`, `question`), up to 8 tags, and can be pinned.
+- **Words only:** a note is a title (up to 160 characters) and text (up to 4000). Text that looks like an email, phone number or ID number is refused, so notes cannot become a back door for patient-level data. The lab never writes data into a note itself.
+- **Kept, not deleted:** archiving hides a note from lists but keeps it. Editing keeps the earlier wording (last 20 versions). Only the author or an administrator can edit, pin or archive. The audit log records who created, changed or archived a note (`note.create`, `note.update`, `note.archive`), never its text.
+- **API:** `GET /v1/notes` (filters: `subject_type`, `subject_id`, `kind`, `tag`, `q`, `pinned`, `include_archived`), `POST /v1/notes`, `GET /v1/notes/{id}` (with earlier wording), `PATCH /v1/notes/{id}`, `DELETE /v1/notes/{id}` (archives), and `GET /v1/notes/recall?subject_type=&subject_id=`, which returns the pinned notes plus everything recorded about one subject (the same content a person sees on its page).
+- **Who:** viewers, registry owners, data scientists, clinical reviewers and admins can read; data scientists, clinical reviewers and admins can write. The CNR `service` key cannot see notes.
+- **Dashboard:** a **Notes** page (search, filter by type or subject, show archived) and a **Lab notes** panel on each dataset, experiment, exploration, hotspot analysis and model version page.
+
 ## Roles
 | Role | Can |
 |---|---|
-| viewer | read catalogue, models, experiments, explorations, hotspot analyses, datasets (cannot call predictions) |
-| data_scientist | viewer + create datasets, upload versions, preview rows, create experiments, explorations and hotspot analyses, register and submit model versions |
-| clinical_reviewer | viewer + approve or reject models in review, read audit log |
+| viewer | read catalogue, models, experiments, explorations, hotspot analyses, datasets and notes (cannot call predictions) |
+| data_scientist | viewer + create datasets, upload versions, preview rows, create experiments, explorations and hotspot analyses, register and submit model versions, write notes |
+| clinical_reviewer | viewer + approve or reject models in review, read audit log, write notes |
 | registry_owner | viewer + approve or reject **food-name matchers** in review (nothing else; cannot deploy) |
 | service | read catalogue, call predictions and CNR assessments only (machine key for CNR) |
 | admin | everything, including keys, deploy, roll back, withdraw and the CNR integration status (still cannot review their own registrations) |

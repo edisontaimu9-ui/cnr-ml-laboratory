@@ -170,3 +170,23 @@ class AuditLog(Base):
     resource_id: Mapped[str | None] = mapped_column(String(60), nullable=True)
     detail: Mapped[dict] = mapped_column(JSON, default=dict)
     ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
+class LabNote(Base):
+    """Laboratory memory: a short written note (decision, finding, lesson, warning, question) attached to one
+    thing in the lab, or to the lab in general. Notes are text written by people; the lab never writes row-level data
+    into them. Notes are archived, never hard-deleted, and edits keep their earlier wording in `history_json`."""
+    __tablename__ = "mlab_notes"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    subject_type: Mapped[str] = mapped_column(String(32), index=True)
+    subject_id: Mapped[str | None] = mapped_column(String(60), nullable=True, index=True)
+    kind: Mapped[str] = mapped_column(String(24), default="note", index=True)
+    title: Mapped[str] = mapped_column(String(160))
+    body: Mapped[str] = mapped_column(Text)
+    tags_json: Mapped[list] = mapped_column(JSON, default=list)
+    pinned: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    history_json: Mapped[list] = mapped_column(JSON, default=list)
