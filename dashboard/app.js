@@ -475,14 +475,14 @@
 
 
   // ---------- Matching: evaluation of food-name matching. Never registered, never deployed, results are not stored. ----------
-  const mtBadge = () => h("span", { class: "badge explore" }, "evaluation · never deployed");
+  const mtBadge = () => h("span", { class: "badge explore" }, "suggest-only · needs approval");
   const mtVerdict = { learning_helps: "Learning from labelled queries helps", learning_hurts: "Learning from labelled queries hurts", no_clear_difference: "No clear difference from registry names alone" };
 
   async function matchingPage() {
     const sets = (await api("/v1/datasets")).filter((d) => d.version_count > 0);
     const intro = [h("div", { class: "row" }, h("h1", null, "Food-name matching"), mtBadge()),
       h("p", null, "Measure how well free-text food names (English, Chichewa, local or colloquial) can be matched to registry food codes, and whether learning from labelled queries beats the registry names alone."),
-      h("div", { class: "notice" }, "This is an evaluation, never a model. It cannot be registered, deployed or sent to CNR, and nothing is stored: the result below disappears when you leave the page. Matches are suggestions for a person to confirm. The score is a similarity, not a probability.")];
+      h("div", { class: "notice" }, "Running an evaluation stores nothing: the result disappears when you leave the page. A matcher only reaches the registry if you register it below, and then it needs approval before an administrator can deploy it. It only ever suggests food codes for a person to confirm (never assigns them), is never shown to CNR, and the score is a similarity, not a probability.")];
     if (sets.length < 1) return [...intro, empty("No dataset versions yet", "Upload two datasets under Datasets: labelled queries (text and correct food code) and the registry food list.")];
     const sel = (id, opts) => h("select", { id }, opts);
     const dq = sel("mqd", sets.map((d) => h("option", { value: d.id }, d.name))), vq = sel("mqv");
@@ -543,11 +543,11 @@
         h("div", { class: "form3" }, field("Hold-out share (%)", tsz, "mts"), field("Candidates to score (top k)", topk, "mtk"), field("Target accuracy for review threshold (%)", tgt, "mta")),
         field("Random seed", seed, "mse")),
       go, err, out,
-      can("write:models") ? registerBox(buildBody) : null,
+      can("write:models") ? matcherRegisterBox(buildBody) : null,
       can("predict:models") ? await tryBox() : null];
   }
 
-  function registerBox(buildBody) {
+  function matcherRegisterBox(buildBody) {
     const use = h("textarea", { id: "mu", rows: 3, maxlength: 2000, placeholder: "Who will use the suggestions and for what, for example: help dietitians find the registry food for a typed food name when entering survey data." });
     const err = h("p", { class: "error", role: "alert" });
     const send = h("button", { onclick: async () => {
