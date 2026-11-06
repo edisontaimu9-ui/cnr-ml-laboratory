@@ -20,6 +20,8 @@ CATALOG = [
      "for community screening when a blood pressure cuff is not always available."),
     ("metabolic-syndrome-screen", "Metabolic syndrome screen", "classification",
      "Screen for metabolic syndrome from cheap measurements (waist, BMI, age, diet) when blood tests are not available."),
+    ("prediabetes-screen", "Prediabetes / raised HbA1c finder", "classification",
+     "Identify people most likely to need confirmatory testing for raised HbA1c or prediabetes when lab results are unavailable."),
     ("ckd-nutrition-risk", "CKD nutrition risk", "classification",
      "Estimate nutrition risk in patients with chronic kidney disease."),
     ("hospital-malnutrition-risk", "Hospital malnutrition risk", "classification",
@@ -48,15 +50,26 @@ LABEL_NOTES = {
         "and the same model without waist is the fairer check). A positive result means 'send for blood tests', never 'has "
         "metabolic syndrome'."
     ),
+    "prediabetes-screen": (
+        "Label from a measured HbA1c at or above 5.7% (ADA prediabetes threshold; this includes the diabetes range, because the aim "
+        "is who needs confirmatory testing), or the definition the data owner agrees. Use a fasting glucose label only if that is "
+        "agreed instead, never mixed in without saying so. HbA1c, glucose, diabetes diagnosis and treatment columns must never be used "
+        "as features: the model is for when lab results are unavailable. People with already-known diabetes should be left out of the "
+        "dataset or analysed separately. A positive result means 'arrange confirmatory testing', never 'has prediabetes'. This is a "
+        "different target from the diabetes risk model, which estimates diabetes itself."
+    ),
 }
 
 # Column-name words that may not be features for a model (they define or reveal its label). Whole words, split on
 # anything that is not a letter or digit, plus the run-together forms in LEAKAGE_SUBSTRINGS.
 LEAKAGE_TOKENS = {
+    "prediabetes-screen": {"hba1c", "a1c", "fpg", "fbg", "fbs", "rbs", "ogtt", "dm", "t2dm", "ifg", "igt"},
     "metabolic-syndrome-screen": {"tg", "hdl", "fpg", "fbg", "fbs", "sbp", "dbp", "bp", "htn", "metsyn"},
     "hypertension-risk": {"systolic", "diastolic", "sbp", "dbp", "bp", "htn", "hypertension", "hypertensive", "antihypertensive"},
 }
 LEAKAGE_SUBSTRINGS = {
+    "prediabetes-screen": ("hba1c", "a1c", "glycated", "glycosylated", "glucose", "glycaemia", "glycemia", "diabet", "prediab",
+                           "metformin", "insulin", "sulfonylurea", "sulphonylurea", "ogtt"),
     "metabolic-syndrome-screen": ("triglycer", "hdl", "glucose", "bloodpressure", "systolic", "diastolic", "hypertens",
                                   "diabet", "metabolicsyndrome", "statin", "fibrate", "lipid"),
     "hypertension-risk": ("bloodpressure", "systolic", "diastolic", "hypertens"),

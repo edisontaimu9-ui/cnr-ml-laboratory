@@ -5,7 +5,7 @@ An independent machine-learning platform for the Chakudya Nutrition Registry (CN
 You can upload and de-identify datasets, train and evaluate models, review and approve them, serve the deployed version, and let CNR request assessments through a dedicated, authenticated contract. Predictions are never presented as confirmed diagnoses.
 
 ## Platform
-- **ML API** (`api/`, FastAPI): API-key authentication, four roles, audit log, full metadata schema (datasets, versions, experiments, model versions), a catalogue of the nine planned model targets, `/health`.
+- **ML API** (`api/`, FastAPI): API-key authentication, four roles, audit log, full metadata schema (datasets, versions, experiments, model versions), a catalogue of the ten planned model targets, `/health`.
 - **Dashboard** (`dashboard/`, static HTML/JS, no build step): installable as an app (PWA), with overview, models, experiments, exploration, hotspots, datasets, registry, prediction, CNR integration, audit log and key management. Pages show honest empty states until there is data.
 - **Deployment**: Dockerfiles, `docker-compose.yml`, `render.yaml`, CI, Supabase RLS script.
 - It does not touch CNR's production API. The two will talk only through authenticated endpoints (see CNR integration below).
@@ -40,6 +40,12 @@ You can upload and de-identify datasets, train and evaluate models, review and a
 - **Label:** the harmonised definition (IDF/AHA/NHLBI 2009, or the one agreed with the data owner): three or more of raised waist, raised triglycerides, low HDL, raised blood pressure, raised fasting glucose, or treatment for them.
 - **Leakage guard:** triglycerides, HDL, glucose, blood pressure, diabetes, statin or lipid-treatment and syndrome columns are **refused as features** (the run fails and names the column). Exclude them next to the target.
 - **Waist overlap:** waist circumference is both a criterion and the main cheap predictor. It is allowed, but every run that uses it carries a warning that scores overstate what the other features can do. Train once without waist and compare.
+
+## Prediabetes / raised HbA1c finder (`prediabetes-screen`)
+- **Purpose:** identify people most likely to need confirmatory testing when lab results are unavailable. A positive result means *arrange confirmatory testing*, never *has prediabetes*. It is a separate target from `diabetes-risk`.
+- **Label:** measured HbA1c at or above 5.7% (ADA threshold; includes the diabetes range because the aim is who needs a confirmatory test), or the definition agreed with the data owner. People with known diabetes should be left out of the dataset or analysed separately.
+- **Leakage guard:** HbA1c, glucose (fasting, random, OGTT), diabetes or prediabetes diagnosis and diabetes-treatment columns (metformin, insulin, sulfonylureas) are **refused as features**: the run fails and names the column. Exclude them next to the target.
+- **Training:** the usual flow. Logistic regression gives readable odds ratios; the calibration check matters here because the output is used to decide who gets tested.
 
 ## Exploration (unsupervised analysis)
 - **A separate type, not a model.** An *exploration* looks for groups of similar rows (**clustering**, k-means) and unusual rows (**anomaly detection**, isolation forest) in a de-identified dataset version. There is no target column and no catalogue model. It is for understanding data and checking data quality.
