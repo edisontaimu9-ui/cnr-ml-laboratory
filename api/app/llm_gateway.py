@@ -2,6 +2,9 @@
 
 - Both come from the server's environment (CHAKUDYA_API_URL or CNR_API_BASE_URL, and CHAKUDYA_CONSUMER_KEY). No request, header,
   body or dashboard setting can change the address or supply a key, so the lab cannot be steered to another host.
+- Key choice: CHAKUDYA_CONSUMER_KEY when set. Otherwise, only if LLM_USE_SURVEILLANCE_KEY=true, the CNR admin key already held for
+  the sync (SURVEILLANCE_API_KEY). That key is broader than a consumer key, so it is sent only to the same host as CNR_API_BASE_URL,
+  the host it is already sent to, never to a different CHAKUDYA_API_URL.
 - The key is read only here, held as a SecretStr, sent only as a Bearer header to that address, and never logged, audited,
   returned or included in an error message. Redirects are refused, so the key cannot follow one to another host.
 - Only the two RAG routes of the contract may be called (ALLOWED_PATHS). Callers hand over text that has already passed
@@ -27,6 +30,22 @@ def base_url(s: Settings) -> str:
     return (s.chakudya_api_url or s.cnr_api_base_url or "").strip().rstrip("/")
 
 
+def _secret(s: Settings) -> tuple[str, str | None]:
+    """(key, source). source is "consumer", "surveillance_admin" or None. The only place either key is read for LLM features."""
+    consumer = s.chakudya_consumer_key.get_secret_value().strip()
+    if consumer:
+        return consumer, "consumer"
+    if s.llm_use_surveillance_key:
+        admin = (s.surveillance_api_key or "").strip()
+        if admin:
+            return admin, "surveillance_admin"
+    return "", None
+
+
+def _host(url: str) -> str:
+    return (urllib.parse.urlsplit((url or "").strip()).netloc or "").lower()
+
+
 def config_problem(s: Settings) -> str | None:
     """None when LLM features can call Chakudya, otherwise a short reason (shown to admins; never contains the key)."""
     if not s.llm_enabled:
@@ -43,17 +62,23 @@ def config_problem(s: Settings) -> str | None:
         return "The Chakudya API address must not contain a query or fragment."
     if s.is_production and u.scheme != "https":
         return "The Chakudya API address must use https in production."
-    key = s.chakudya_consumer_key.get_secret_value().strip()
+    key, source = _secret(s)
     if len(key) < MIN_KEY_CHARS or any(c.isspace() for c in key):
-        return "CHAKUDYA_CONSUMER_KEY is not set (or is too short)."
+        return ("SURVEILLANCE_API_KEY is not set (or is too short)." if s.llm_use_surveillance_key and source is None
+                else "CHAKUDYA_CONSUMER_KEY is not set (or is too short).")
+    if source == "surveillance_admin" and _host(url) != _host(s.cnr_api_base_url):
+        return "The CNR admin key may only be used for the CNR address (CNR_API_BASE_URL); set CHAKUDYA_CONSUMER_KEY for a different host."
     return None
 
 
 def public_status(s: Settings) -> dict:
     """What an admin may see: no key, no path, no query; only the host name and whether a key exists."""
     host = urllib.parse.urlsplit(base_url(s)).hostname if base_url(s) else None
+    key, source = _secret(s)
     return {"enabled": s.llm_enabled, "ready": config_problem(s) is None, "problem": config_problem(s), "chakudya_host": host,
-            "consumer_key_configured": len(s.chakudya_consumer_key.get_secret_value().strip()) >= MIN_KEY_CHARS}
+            "consumer_key_configured": len(s.chakudya_consumer_key.get_secret_value().strip()) >= MIN_KEY_CHARS,
+            "key_source": source, "uses_admin_key": source == "surveillance_admin",
+            "note": "Using the CNR admin key (broader than a consumer key). Only the two RAG routes can be called with it." if source == "surveillance_admin" else None}
 
 
 def post_json(s: Settings, path: str, payload: dict, *, correlation_id: str | None = None) -> dict:
@@ -63,7 +88,7 @@ def post_json(s: Settings, path: str, payload: dict, *, correlation_id: str | No
     bad = config_problem(s)
     if bad:
         raise GatewayError(bad)
-    headers = {"Authorization": "Bearer " + s.chakudya_consumer_key.get_secret_value().strip(), "Content-Type": "application/json",
+    headers = {"Authorization": "Bearer " + _secret(s)[0], "Content-Type": "application/json",
                "Accept": "application/json", "User-Agent": "cnr-ml-lab/" + s.service_version}
     if correlation_id:
         headers["X-Request-Id"] = correlation_id[:64]

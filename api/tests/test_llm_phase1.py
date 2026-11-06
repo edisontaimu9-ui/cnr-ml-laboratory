@@ -461,3 +461,74 @@ def test_gateway_unreachable_host_gives_a_key_free_message():
     with pytest.raises(llm_gateway.GatewayError) as e:
         llm_gateway.post_json(s, "/rag/ask", {})
     assert "No usable answer" in str(e.value) and FAKE_KEY not in str(e.value)
+
+
+# ================================================================= 7. opt-in reuse of the CNR admin key (SURVEILLANCE_API_KEY)
+ADMIN_CNR_KEY = "cnr_admin_" + "Q1w2E3r4T5y6U7i8" * 2
+
+
+def test_admin_key_is_not_used_unless_opted_in():
+    s = make_settings(chakudya_consumer_key="", surveillance_api_key=ADMIN_CNR_KEY, cnr_api_base_url="https://api.chakudya.example")
+    assert "CHAKUDYA_CONSUMER_KEY" in llm_gateway.config_problem(s)
+    assert llm_gateway.public_status(s)["key_source"] is None
+
+
+def test_opt_in_uses_the_admin_key_for_the_cnr_host_only():
+    ok = make_settings(chakudya_consumer_key="", surveillance_api_key=ADMIN_CNR_KEY, llm_use_surveillance_key=True,
+                       chakudya_api_url="", cnr_api_base_url="https://api.chakudya.example")
+    assert llm_gateway.config_problem(ok) is None
+    st = llm_gateway.public_status(ok)
+    assert st["key_source"] == "surveillance_admin" and st["uses_admin_key"] is True and st["note"] and ADMIN_CNR_KEY not in json.dumps(st)
+    same_host = make_settings(chakudya_consumer_key="", surveillance_api_key=ADMIN_CNR_KEY, llm_use_surveillance_key=True,
+                              chakudya_api_url="https://api.chakudya.example/v2", cnr_api_base_url="https://api.chakudya.example")
+    assert llm_gateway.config_problem(same_host) is None
+    other = make_settings(chakudya_consumer_key="", surveillance_api_key=ADMIN_CNR_KEY, llm_use_surveillance_key=True,
+                          chakudya_api_url="https://elsewhere.example", cnr_api_base_url="https://api.chakudya.example")
+    problem = llm_gateway.config_problem(other)
+    assert problem and "CNR address" in problem and ADMIN_CNR_KEY not in problem
+    with pytest.raises(llm_gateway.GatewayError):
+        llm_gateway.post_json(other, "/rag/ask", {})
+
+
+def test_opt_in_without_an_admin_key_names_the_missing_setting():
+    s = make_settings(chakudya_consumer_key="", surveillance_api_key="", llm_use_surveillance_key=True)
+    assert "SURVEILLANCE_API_KEY" in llm_gateway.config_problem(s)
+
+
+def test_consumer_key_wins_when_both_are_set(server):
+    s = make_settings(chakudya_api_url=server, cnr_api_base_url=server, surveillance_api_key=ADMIN_CNR_KEY, llm_use_surveillance_key=True)
+    assert llm_gateway.public_status(s)["key_source"] == "consumer"
+    llm_gateway.post_json(s, "/rag/retrieve", {"query": "iron"})
+    assert _Handler.seen[0]["auth"] == "Bearer " + FAKE_KEY
+
+
+def test_admin_key_goes_only_as_bearer_to_the_cnr_host_and_never_leaks(server):
+    s = make_settings(chakudya_consumer_key="", chakudya_api_url="", cnr_api_base_url=server, surveillance_api_key=ADMIN_CNR_KEY,
+                      llm_use_surveillance_key=True)
+    assert llm_gateway.post_json(s, "/rag/ask", {"question": "q"}) == {"ok": True}
+    hit = _Handler.seen[0]
+    assert hit["auth"] == "Bearer " + ADMIN_CNR_KEY and ADMIN_CNR_KEY.encode() not in hit["body"]
+    for mode in ("redirect", "401", "503"):
+        _Handler.mode = mode
+        with pytest.raises(llm_gateway.GatewayError) as e:
+            llm_gateway.post_json(s, "/rag/ask", {"question": "q"})
+        assert ADMIN_CNR_KEY not in str(e.value)
+
+
+def test_admin_key_never_appears_in_responses_or_audit(client, monkeypatch):
+    s = make_settings(chakudya_consumer_key="", chakudya_api_url="", cnr_api_base_url="https://api.chakudya.example",
+                      surveillance_api_key=ADMIN_CNR_KEY, llm_use_surveillance_key=True)
+    monkeypatch.setattr(llm_router, "get_settings", lambda: s)
+    r = client.get("/v1/llm/status", headers=ADMIN)
+    assert r.json()["key_source"] == "surveillance_admin" and ADMIN_CNR_KEY not in r.text
+    assert ADMIN_CNR_KEY not in client.get("/v1/llm/contract", headers=ADMIN).text and ADMIN_CNR_KEY not in json.dumps(audit_rows())
+
+
+def test_only_the_sync_modules_and_the_gateway_read_the_admin_key():
+    readers = {p.name for p in APP_DIR.rglob("*.py") if "surveillance_api_key" in p.read_text()}
+    assert readers <= {"config.py", "llm_gateway.py", "surveillance_sync.py", "training_sync.py"}
+    # The dashboard's sync help text already names the variable; it must hold no key value and no LLM key setting.
+    for f in (ROOT / "dashboard").glob("*"):
+        if f.suffix in (".js", ".html"):
+            low = f.read_text().lower()
+            assert "llm_use_surveillance_key" not in low and "cnr_admin_" not in low and "bearer " + ADMIN_CNR_KEY.lower() not in low, f.name

@@ -43,8 +43,11 @@ services:
         value: "false"
       - key: CHAKUDYA_API_URL
         value: https://api.chakudya.xyz
+      # Optional dedicated key. Left empty, the lab reuses SURVEILLANCE_API_KEY (below), because LLM_USE_SURVEILLANCE_KEY is true.
       - key: CHAKUDYA_CONSUMER_KEY
         sync: false
+      - key: LLM_USE_SURVEILLANCE_KEY
+        value: "true"
       - key: LLM_IDENTIFIER_POLICY
         value: reject
   - type: web

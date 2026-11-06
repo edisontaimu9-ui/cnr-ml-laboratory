@@ -20,7 +20,7 @@ It provides the rules and the transport that phases 2 to 6 must go through.
 
 | Rule | Code | How it is enforced |
 |---|---|---|
-| Chakudya URL and consumer key are server-side only | `llm_gateway.py`, `config.py` | Read from the environment only (`CHAKUDYA_API_URL`, falling back to `CNR_API_BASE_URL`, and `CHAKUDYA_CONSUMER_KEY`). The key is a `SecretStr`, read in one module, sent only as a Bearer header to the configured host, never returned, logged, audited or put in an error message. Redirects are refused. Only `/rag/ask` and `/rag/retrieve` can be called. No request field can change the address. |
+| Chakudya URL and consumer key are server-side only | `llm_gateway.py`, `config.py` | Read from the environment only (`CHAKUDYA_API_URL`, falling back to `CNR_API_BASE_URL`, and `CHAKUDYA_CONSUMER_KEY`). The key (a consumer key, or the CNR admin key if opted in) is read in one module, sent only as a Bearer header to the configured host, never returned, logged, audited or put in an error message. Redirects are refused. Only `/rag/ask` and `/rag/retrieve` can be called. No request field can change the address. |
 | Never diagnose | `llm_policy.py` | Questions asking the service to diagnose a person, or to prescribe or dose for a patient, are refused (`screen_request`). Answers that state a diagnosis or prescription about a person are replaced by a fixed refusal text (`enforce_output`). `SYSTEM_RULES` is the text later phases put in front of any model. Criteria, guideline text and documented findings stay allowed. |
 | No identifiable text leaves the lab | `llm_policy.prepare_for_external` | Runs the NLP identifier detector (`nlp_lab.screen_identifiers`, the same detector and overlap rule as `/v1/nlp/analyze`). Identifiable text is refused (default) or masked; masked text is checked again. Text is first folded (full-width characters) and stripped of zero-width and control characters, so identifiers cannot hide behind look-alikes. There is no mode that skips the check. |
 | Audit holds counts and metadata only | `llm_audit.py` | An allow-list: integers, booleans, short fixed codes and identifier-type counts. Anything else is dropped, and only the field name is logged. |
@@ -48,7 +48,8 @@ It provides the rules and the transport that phases 2 to 6 must go through.
 |---|---|---|
 | `LLM_ENABLED` | `false` | Master switch for calls to Chakudya (phase 2 onward). |
 | `CHAKUDYA_API_URL` | empty | Chakudya address; empty falls back to `CNR_API_BASE_URL`. https required in production. |
-| `CHAKUDYA_CONSUMER_KEY` | empty | Chakudya consumer key (at least 16 characters). Secret: set it in the Render dashboard, never in the repo. |
+| `CHAKUDYA_CONSUMER_KEY` | empty | Optional dedicated Chakudya consumer key (at least 16 characters). Secret: set it in the Render dashboard, never in the repo. Wins over the admin key when both exist. |
+| `LLM_USE_SURVEILLANCE_KEY` | `false` (`true` in `render.yaml`) | When no consumer key is set, reuse the CNR admin key already held as `SURVEILLANCE_API_KEY`. It is broader than a consumer key, so it is opt-in, sent only to the `CNR_API_BASE_URL` host (a different `CHAKUDYA_API_URL` host is refused), and the gateway can still call only `/rag/ask` and `/rag/retrieve` with it. `GET /v1/llm/status` shows `key_source` and `uses_admin_key`, never the key. |
 | `LLM_IDENTIFIER_POLICY` | `reject` | Default for identifiable text: `reject` or `mask`. An invalid value falls back to `reject`. |
 | `LLM_MAX_TEXT_CHARS` | `4000` | Longest text accepted. |
 | `LLM_RATE_LIMIT_PER_MIN` / `LLM_RATE_LIMIT_PER_HOUR` | `20` / `300` | Allowance per API key. |

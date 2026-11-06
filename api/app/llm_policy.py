@@ -48,7 +48,7 @@ RULES = [
     "Answers that state a diagnosis or prescription about a person are blocked before they are returned.",
     "Text leaves the laboratory only after the identifier detector has run; identifiable text is refused (default) or masked.",
     "The audit log holds counts and fixed codes only, never clinical text, questions, answers or identifiers.",
-    "The Chakudya API address and consumer key are held on the server only and are never sent to a browser or returned by an endpoint.",
+    "The Chakudya API address and key (a consumer key, or the existing CNR admin key if opted in) are held on the server only and are never sent to a browser or returned by an endpoint.",
     "Every request is limited per API key.",
 ]
 

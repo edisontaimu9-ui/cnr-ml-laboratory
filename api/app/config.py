@@ -46,6 +46,9 @@ class Settings(BaseSettings):
     llm_enabled: bool = False
     chakudya_api_url: str = ""                  # empty -> CNR_API_BASE_URL
     chakudya_consumer_key: SecretStr = SecretStr("")
+    # Opt-in: with no consumer key set, reuse the CNR admin key already held for the sync (SURVEILLANCE_API_KEY). It is a broader
+    # key than a consumer key, so it is never used silently, and only for the CNR address it is already sent to (see llm_gateway).
+    llm_use_surveillance_key: bool = False
     llm_timeout_s: float = 30.0
     llm_max_response_kb: int = 256
     # Text may leave the lab only after the NLP identifier detector has run. "reject" refuses identifiable text (default);
