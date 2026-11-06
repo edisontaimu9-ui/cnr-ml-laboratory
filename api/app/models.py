@@ -217,3 +217,21 @@ class NlpCorpusVersion(Base):
     report_json: Mapped[dict] = mapped_column(JSON, default=dict)
     created_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class NlpTrainingRun(Base):
+    """A spaCy NER training run on one NLP corpus version (NLP lab stage 2).
+
+    Like `Exploration`, deliberately NOT an Experiment and with no foreign key to `mlab_model_versions`: until stage 3 adds review and
+    approval for NLP models, nothing here can be registered, deployed, served or sent to CNR. The model file is a private artifact."""
+    __tablename__ = "mlab_nlp_training_runs"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    corpus_version_id: Mapped[int] = mapped_column(ForeignKey("mlab_nlp_corpus_versions.id"))
+    params_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    results_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    artifact_uri: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    trial: Mapped[bool] = mapped_column(Boolean, default=False)
+    status: Mapped[str] = mapped_column(String(32), default="queued")
+    created_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

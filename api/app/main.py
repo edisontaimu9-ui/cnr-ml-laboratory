@@ -11,8 +11,8 @@ from . import surveillance_sync, training_sync
 from .catalog import CATALOG, LABEL_NOTE, LABEL_NOTES
 from .config import get_settings
 from .db import Base, SessionLocal, add_missing_columns, engine
-from .models import ApiKey, Exploration, Experiment, HotspotAnalysis, ModelDefinition, utcnow
-from .routers import admin, core, datasets, experiments, explorations, hotspots, integration, matcher, matching, nlp, nlp_corpora, notes, predict, registry, sync
+from .models import ApiKey, Exploration, Experiment, HotspotAnalysis, ModelDefinition, NlpTrainingRun, utcnow
+from .routers import admin, core, datasets, experiments, explorations, hotspots, integration, matcher, matching, nlp, nlp_corpora, nlp_training, notes, predict, registry, sync
 from .security import hash_key
 
 log = logging.getLogger("cnr-ml")
@@ -51,6 +51,9 @@ def _fail_interrupted() -> None:
         for h in db.scalars(select(HotspotAnalysis).where(HotspotAnalysis.status.in_(["queued", "running"]))):
             h.status, h.finished_at = "failed", utcnow()
             h.results_json = {"error": "Interrupted by a service restart. Start it again."}
+        for n in db.scalars(select(NlpTrainingRun).where(NlpTrainingRun.status.in_(["queued", "running"]))):
+            n.status, n.finished_at = "failed", utcnow()
+            n.results_json = {"error": "Interrupted by a service restart. Start it again."}
         db.commit()
 
 
@@ -115,6 +118,7 @@ app.include_router(matcher.router)
 app.include_router(notes.router)
 app.include_router(nlp.router)
 app.include_router(nlp_corpora.router)
+app.include_router(nlp_training.router)
 app.include_router(registry.router)
 app.include_router(predict.router)
 app.include_router(integration.router)
