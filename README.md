@@ -117,6 +117,7 @@ You can upload and de-identify datasets, train and evaluate models, review and a
 - **Review threshold:** chosen by cross-validation on the training part only, then checked once on the hold-out set. Below it, the query goes to a person.
 - **Governance:** not a catalogue model. No model file, no registry, no serving, no CNR announcement (`tests/test_matching.py` enforces the isolation). Results hold counts and rates only, never query text. Runs inside the request, capped at 50,000 labelled queries, one heavy job at a time.
 - **Endpoint:** `POST /v1/matching/evaluations` (data scientist or admin).
+- **Dashboard:** the **Matching** page (data scientist or admin) picks the two dataset versions and columns, runs the evaluation and shows scores, the learning verdict, the review-threshold table, group results and warnings. The result is not stored.
 
 ## District hotspots and prevalence trends (aggregated analysis)
 - **A separate type, not a model.** A *hotspot analysis* works on **counts per area (and period)**, never on individual children: the number with the condition, the number examined, and optionally a month or year and a centre point per area. Areas can be districts, facilities or communities. It supports the hotspot dashboard; no individual-level data is needed or accepted.

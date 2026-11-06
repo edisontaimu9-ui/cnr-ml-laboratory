@@ -61,6 +61,7 @@
     { id: "models", label: "Models", perm: "read:catalog", render: models },
     { id: "experiments", label: "Experiments", perm: "read:experiments", render: experiments },
     { id: "explorations", label: "Exploration", perm: "read:explorations", render: explorations },
+    { id: "matching", label: "Matching", perm: "write:experiments", render: matchingPage },
     { id: "hotspots", label: "Hotspots", perm: "read:hotspots", render: hotspots },
     { id: "predict", label: "Predict", perm: "predict:models", render: predictPage },
     { id: "registry", label: "Registry", perm: "read:models", render: registry },
@@ -431,6 +432,110 @@
     return out;
   }
 
+
+  // ---------- Matching: evaluation of food-name matching. Never registered, never deployed, results are not stored. ----------
+  const mtBadge = () => h("span", { class: "badge explore" }, "evaluation · never deployed");
+  const mtVerdict = { learning_helps: "Learning from labelled queries helps", learning_hurts: "Learning from labelled queries hurts", no_clear_difference: "No clear difference from registry names alone" };
+
+  async function matchingPage() {
+    const sets = (await api("/v1/datasets")).filter((d) => d.version_count > 0);
+    const intro = [h("div", { class: "row" }, h("h1", null, "Food-name matching"), mtBadge()),
+      h("p", null, "Measure how well free-text food names (English, Chichewa, local or colloquial) can be matched to registry food codes, and whether learning from labelled queries beats the registry names alone."),
+      h("div", { class: "notice" }, "This is an evaluation, never a model. It cannot be registered, deployed or sent to CNR, and nothing is stored: the result below disappears when you leave the page. Matches are suggestions for a person to confirm. The score is a similarity, not a probability.")];
+    if (sets.length < 1) return [...intro, empty("No dataset versions yet", "Upload two datasets under Datasets: labelled queries (text and correct food code) and the registry food list.")];
+    const sel = (id, opts) => h("select", { id }, opts);
+    const dq = sel("mqd", sets.map((d) => h("option", { value: d.id }, d.name))), vq = sel("mqv");
+    const dr = sel("mrd", sets.map((d) => h("option", { value: d.id }, d.name))), vr = sel("mrv");
+    const colSel = (id, optional) => sel(id, [optional ? h("option", { value: "" }, "None") : null]);
+    const cQ = colSel("mcq"), cF = colSel("mcf"), cG = colSel("mcg", true);
+    const rC = colSel("mrc"), rL = colSel("mrl"), rA = colSel("mra", true);
+    const num = (id, v, min, max, step) => h("input", { id, type: "number", value: v, min, max, step: step || 1 });
+    const tsz = num("mts", 25, 10, 40), seed = num("mse", 42, 0, 2147483647), topk = num("mtk", 5, 1, 10), tgt = num("mta", 95, 50, 99.9, 0.5);
+    const err = h("p", { class: "error", role: "alert" });
+    const out = h("div", null);
+    const state = { q: [], r: [] };
+    const fill = (selEl, cols, optional, guess) => {
+      selEl.replaceChildren(...[optional ? h("option", { value: "" }, "None") : null, ...cols.map((c) => h("option", { value: c.name }, c.name))]);
+      const g = cols.find((c) => guess.some((s) => c.name.toLowerCase().includes(s)));
+      if (g) selEl.value = g.name;
+    };
+    const loadQ = async () => {
+      state.q = (await api("/v1/datasets/" + dq.value)).versions;
+      vq.replaceChildren(...state.q.map((v) => h("option", { value: v.version }, "v" + v.version + " (" + v.row_count + " rows)")));
+      drawQ();
+    };
+    const loadR = async () => {
+      state.r = (await api("/v1/datasets/" + dr.value)).versions;
+      vr.replaceChildren(...state.r.map((v) => h("option", { value: v.version }, "v" + v.version + " (" + v.row_count + " rows)")));
+      drawR();
+    };
+    const colsOf = (list, v) => ((list.find((x) => String(x.version) === v.value) || { schema_info: { columns: [] } }).schema_info.columns || []);
+    const drawQ = () => { const c = colsOf(state.q, vq); fill(cQ, c, false, ["search", "query", "text"]); fill(cF, c, false, ["code", "food"]); fill(cG, c, true, ["language", "source"]); cG.value = ""; };
+    const drawR = () => { const c = colsOf(state.r, vr); fill(rC, c, false, ["code"]); fill(rL, c, false, ["label", "food"]); fill(rA, c, true, ["alias", "local"]); };
+    dq.addEventListener("change", loadQ); vq.addEventListener("change", drawQ);
+    dr.addEventListener("change", loadR); vr.addEventListener("change", drawR);
+    await loadQ(); await loadR();
+    if (sets.length > 1) dr.selectedIndex = Math.min(1, sets.length - 1), await loadR();
+
+    const go = h("button", { class: "primary", onclick: async () => {
+      err.textContent = ""; out.replaceChildren();
+      go.disabled = true;
+      try {
+        const body = { queries_dataset_id: Number(dq.value), queries_version: Number(vq.value), query_column: cQ.value, food_code_column: cF.value,
+          group_column: cG.value || null, registry_dataset_id: Number(dr.value), registry_version: Number(vr.value), registry_code_column: rC.value,
+          registry_label_column: rL.value, registry_aliases_column: rA.value || null, test_size: Number(tsz.value) / 100, seed: Number(seed.value),
+          top_k: Number(topk.value), target_accuracy: Number(tgt.value) / 100 };
+        const res = await api("/v1/matching/evaluations", { method: "POST", body: JSON.stringify(body) });
+        out.replaceChildren(...matchingResults(res.results));
+      } catch (e) { err.textContent = e.message; }
+      go.disabled = false;
+    } }, "Run evaluation");
+
+    return [...intro,
+      h("h3", null, "Labelled queries"),
+      h("div", { class: "form3" }, field("Dataset", dq, "mqd"), field("Version", vq, "mqv")),
+      h("div", { class: "form3" }, field("Query text column", cQ, "mcq"), field("Correct food code column", cF, "mcf"), field("Group column (optional, for example language)", cG, "mcg")),
+      h("h3", null, "Registry food list"),
+      h("div", { class: "form3" }, field("Dataset", dr, "mrd"), field("Version", vr, "mrv")),
+      h("div", { class: "form3" }, field("Food code column", rC, "mrc"), field("Food label column", rL, "mrl"), field("Aliases column (optional, separated by ; or |)", rA, "mra")),
+      h("details", { class: "card" }, h("summary", null, "Settings"),
+        h("div", { class: "form3" }, field("Hold-out share (%)", tsz, "mts"), field("Candidates to score (top k)", topk, "mtk"), field("Target accuracy for review threshold (%)", tgt, "mta")),
+        field("Random seed", seed, "mse")),
+      go, err, out];
+  }
+
+  function matchingResults(r) {
+    const stat = (l, v, sub) => h("div", { class: "stat" }, h("b", null, v), h("span", null, l + (sub ? " · " + sub : "")));
+    const rng = (a) => (a ? pct(a[0]) + " to " + pct(a[1]) : "—");
+    const o = [h("h2", null, "Result"),
+      h("p", { class: "muted" }, r.n_registry_foods + " registry foods · " + r.n_train + " training and " + r.n_test + " hold-out queries · " + r.n_foods_in_queries + " foods appear in the queries"),
+      h("div", { class: "stats" },
+        stat("Learned matcher, right first time", pct(r.learned.top1), "95% range " + rng(r.learned.top1_95_range)),
+        stat("Registry names only", pct(r.names_only.top1), "95% range " + rng(r.names_only.top1_95_range)),
+        stat("Right within top 3 (learned)", pct(r.learned.top3)),
+        r.learned.top5 != null ? stat("Right within top 5 (learned)", pct(r.learned.top5)) : null,
+        stat("Exact-match rule: answers", pct(r.exact_match_rule.coverage), "right when it answers " + pct(r.exact_match_rule.answered_accuracy)))];
+    const le = r.learning_effect;
+    o.push(h("div", { class: "row" }, h("b", null, "Does learning help?"), h("span", { class: "badge " + (le.verdict === "learning_hurts" ? "bad" : le.verdict === "learning_helps" ? "" : "planned") }, mtVerdict[le.verdict] || le.verdict)),
+      h("p", { class: "muted" }, "Difference in right-first-time: " + signed(le.top1_difference == null ? null : Math.round(le.top1_difference * 1000) / 10) + " points (95% range " + rng(le["95_range"]) + "). " + le.note));
+    const nt = r.not_already_a_registry_name;
+    o.push(h("h3", null, "Queries that are not already a registry name"),
+      nt.learned ? table(["", "Right first time", "Within top 3"], [["Learned matcher", pct(nt.learned.top1), pct(nt.learned.top3)], ["Registry names only", pct(nt.names_only.top1), pct(nt.names_only.top3)]])
+        : h("p", { class: "muted" }, nt.note),
+      h("p", { class: "muted" }, "Share of hold-out queries that are exactly a registry name or alias: " + pct(nt.trivial_share) + "."));
+    const a = r.abstention;
+    o.push(h("h3", null, "Review threshold"),
+      h("p", { class: "muted" }, "Chosen on training data only: " + (a.threshold_chosen_on_training == null ? "none reached the target accuracy, so every match would need review" : a.threshold_chosen_on_training) + ". The score is a similarity, not a probability."));
+    if (a.holdout_at_threshold) o.push(h("p", null, "On the hold-out set at that threshold: " + pct(a.holdout_at_threshold.coverage) + " answered automatically, " + pct(a.holdout_at_threshold.answered_accuracy) + " of those right."));
+    o.push(table(["Threshold", "Answered", "Coverage", "Right when answered"], a.holdout_table.map((t) => [t.threshold, t.answered, pct(t.coverage), pct(t.answered_accuracy)])));
+    if (r.groups && r.groups.length) o.push(h("h3", null, "By group"), table(["Group", "Hold-out queries", "Learned", "Names only"], r.groups.map((g) => [g.group, g.n_test, g.learned_top1 != null ? pct(g.learned_top1) : g.note, g.names_only_top1 != null ? pct(g.names_only_top1) : "—"])));
+    if (r.most_confused_foods.length) o.push(h("h3", null, "Most confused foods"), table(["Correct code", "Predicted code", "Times"], r.most_confused_foods.map((c) => [c.true_food_code, c.predicted_food_code, c.count])));
+    const c = r.cleaning;
+    o.push(h("p", { class: "muted" }, "Cleaning: " + c.rows_in + " rows in, " + c.rows_used + " used. Dropped " + c.dropped_empty_or_too_long + " empty or too long, " + c.dropped_unknown_food_code + " with an unknown food code, " + c.dropped_conflicting_labels + " with conflicting labels."));
+    (r.warnings || []).forEach((w) => o.push(h("div", { class: "notice" }, w)));
+    o.push(h("p", { class: "muted" }, r.note));
+    return o;
+  }
 
   // ---------- Hotspots: district prevalence trends and hotspots from AGGREGATED counts. Never registered, never deployed. ----------
   const hsBadge = () => h("span", { class: "badge explore" }, "aggregated analysis · never deployed");
