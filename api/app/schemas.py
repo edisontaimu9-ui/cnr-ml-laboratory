@@ -9,7 +9,7 @@ def _iso(d: datetime | None) -> str | None:
 
 
 UTC = Annotated[datetime | None, PlainSerializer(_iso, return_type=str | None)]
-Role = Literal["admin", "data_scientist", "clinical_reviewer", "viewer", "service"]
+Role = Literal["admin", "data_scientist", "clinical_reviewer", "registry_owner", "viewer", "service"]
 
 
 class ORM(BaseModel):
@@ -325,3 +325,14 @@ class MatchingEvaluate(BaseModel):
     seed: int = Field(default=42, ge=0, le=2**31 - 1)
     top_k: int = Field(default=5, ge=1, le=10)
     target_accuracy: float = Field(default=0.95, ge=0.5, le=0.999)
+
+
+class MatchingCandidate(MatchingEvaluate):
+    """Evaluate and register the evaluated matcher as a candidate version. The registered model is the one fitted on the
+    training part and scored on the hold-out part, so what is reviewed is exactly what is evaluated."""
+    intended_use: str = Field(min_length=20, max_length=2000)
+
+
+class MatchSuggest(BaseModel):
+    queries: list[Annotated[str, Field(min_length=1, max_length=120)]] = Field(min_length=1, max_length=50)
+    top_k: int = Field(default=5, ge=1, le=10)

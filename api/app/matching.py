@@ -100,6 +100,10 @@ class Index:
         self.vec = TfidfVectorizer(analyzer="char_wb", ngram_range=(2, 4), sublinear_tf=True, dtype=np.float32)
         self.E = self.vec.fit_transform(texts)
 
+    @classmethod
+    def from_bundle(cls, bundle: dict) -> "Index":
+        return cls(list(bundle["ids"]), [list(b) for b in bundle["base"]], {int(k): list(v) for k, v in bundle["learned"].items()})
+
     def top_k(self, queries: list[str], k: int) -> tuple[np.ndarray, np.ndarray]:
         k = min(k, len(self.ids))
         idx = np.zeros((len(queries), k), dtype=int)
@@ -156,11 +160,30 @@ def _scores(true: np.ndarray, idx: np.ndarray, ks: list[int]) -> dict:
     return {f"top{k}": _r(_hits(true, idx, k).mean()) for k in ks}
 
 
-def _fit(ids, base, qn_train: list[str], y_train: np.ndarray) -> Index:
+def _learned(qn_train: list[str], y_train: np.ndarray) -> dict[int, list[str]]:
     learned: dict[int, list[str]] = {}
     for q, y in zip(qn_train, y_train):
         learned.setdefault(int(y), []).append(q)
-    return Index(ids, base, learned)
+    return learned
+
+
+def _fit(ids, base, qn_train: list[str], y_train: np.ndarray) -> Index:
+    return Index(ids, base, _learned(qn_train, y_train))
+
+
+def suggest(index: Index, queries: list[str], k: int, threshold: float | None) -> list[dict]:
+    """Ranked candidates for a person to confirm. Never an assignment: `below_review_threshold` only says how much
+    care the suggestion needs, and is always true when no threshold reached the target accuracy."""
+    idx, sc = index.top_k(queries, k)
+    out = []
+    for q, ri, rs in zip(queries, idx, sc):
+        has_text = normalise(q) != ""
+        top = float(rs[0]) if has_text and len(rs) else 0.0
+        second = float(rs[1]) if has_text and len(rs) > 1 else 0.0
+        out.append({"candidates": [{"food_code": index.ids[int(i)], "similarity": _r(s)} for i, s in zip(ri, rs)] if has_text else [],
+                    "top_similarity": _r(top), "margin_to_next": _r(top - second),
+                    "below_review_threshold": bool(threshold is None or top < threshold or not has_text)})
+    return out
 
 
 def _pick_threshold(score: np.ndarray, correct: np.ndarray, target: float) -> float | None:
@@ -180,7 +203,7 @@ def _abstention_table(score: np.ndarray, correct: np.ndarray) -> list[dict]:
     return rows
 
 
-def run(pairs: pd.DataFrame, registry: pd.DataFrame, cfg: Config) -> dict:
+def run(pairs: pd.DataFrame, registry: pd.DataFrame, cfg: Config, bundle: bool = False):
     warnings: list[str] = []
     for c in (cfg.query_col, cfg.food_col, cfg.group_col):
         if c and c not in pairs.columns:
@@ -318,7 +341,7 @@ def run(pairs: pd.DataFrame, registry: pd.DataFrame, cfg: Config) -> dict:
     if len(ids) > 0 and len(set(ytr)) / len(ids) < 0.3:
         warnings.append("Labelled queries cover under 30% of the registry. Scores say little about the other foods.")
 
-    return {
+    results = {
         "kind": "matching_evaluation",
         "method": "character 2-4-gram TF-IDF similarity over registry names, aliases and (learned matcher only) labelled training queries",
         "n_registry_foods": len(ids), "n_foods_in_queries": int(df["f"].nunique()),
@@ -334,3 +357,8 @@ def run(pairs: pd.DataFrame, registry: pd.DataFrame, cfg: Config) -> dict:
         "warnings": warnings,
         "note": "Candidates are suggestions for a person to confirm. A similarity score is not the chance that a match is right.",
     }
+    if not bundle:
+        return results
+    # The matcher that was evaluated: fitted on the training part only, with the threshold chosen on training data only.
+    return results, {"kind": "food_matcher", "format": 1, "ids": ids, "base": base, "learned": _learned(qtr, ytr),
+                     "threshold": thr, "target_accuracy": cfg.target_accuracy}

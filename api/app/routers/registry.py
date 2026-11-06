@@ -18,7 +18,7 @@ from ..db import get_db
 from ..models import Experiment, ModelDefinition, ModelVersion, utcnow
 from ..schemas import (ApproveVersion, DeployVersion, ModelDefinitionOut, ModelVersionDetail, ModelVersionOut,
                        RegisterVersion, RejectVersion, RetireVersion, SubmitVersion)
-from ..security import Principal, require
+from ..security import Principal, require, require_any
 
 router = APIRouter(prefix="/v1", tags=["registry"])
 
@@ -43,6 +43,10 @@ def catalog_item(slug: str, db: Session = Depends(get_db)):
 # ---------- helpers ----------
 
 def _headline(m: dict) -> dict:
+    if m.get("task") == "matching":
+        return {"task": "matching", "metric": "top1", "test": (m.get("learned") or {}).get("top1"),
+                "baseline": (m.get("names_only") or {}).get("top1"), "n_rows": m.get("n_test"),
+                "warnings": len(m.get("warnings", []))}
     t, b = m.get("test", {}), m.get("baseline", {})
     key = "macro_f1" if m.get("task") == "classification" else "r2"
     return {"task": m.get("task"), "metric": key, "test": t.get(key), "baseline": b.get(key),
@@ -113,6 +117,17 @@ def _separate(v: ModelVersion, p: Principal) -> None:
                                  "Ask a clinical reviewer to sign in with their own key.")
 
 
+def _review_scope(db: Session, v: ModelVersion, p: Principal, request: Request) -> None:
+    """Clinical reviewers and admins review any model. The food registry's data owner reviews food-name matchers only."""
+    if "approve:models" in p.permissions:
+        return
+    d = db.get(ModelDefinition, v.model_definition_id)
+    if d is None or d.task_type != "matching":
+        audit.record(db, "auth.forbidden", principal=p, request=request,
+                     detail={"permission": "approve:models", "path": request.url.path})
+        raise HTTPException(403, "Your role can review food-name matchers only.")
+
+
 def _deploy(db: Session, v: ModelVersion, p: Principal, request: Request, note: str, action: str) -> None:
     _verify_artifact(v)
     now = utcnow()
@@ -130,7 +145,8 @@ def _deploy(db: Session, v: ModelVersion, p: Principal, request: Request, note: 
     audit.record(db, "model." + action, principal=p, request=request, resource_type="model_version", resource_id=v.id,
                  detail={"model_definition_id": v.model_definition_id, "version": v.version})
     d = db.get(ModelDefinition, v.model_definition_id)
-    webhook.emit("rollback" if action == "rollback" else "deployed", d.slug, v.version, v.id, superseded_version=replaced)
+    if d.task_type != "matching":       # CNR consumes risk models; a food matcher is not announced to it
+        webhook.emit("rollback" if action == "rollback" else "deployed", d.slug, v.version, v.id, superseded_version=replaced)
 
 
 # ---------- read ----------
@@ -203,9 +219,10 @@ def submit(vid: int, body: SubmitVersion, request: Request, p: Principal = Depen
 
 
 @router.post("/models/versions/{vid}/approve", response_model=ModelVersionDetail)
-def approve(vid: int, body: ApproveVersion, request: Request, p: Principal = Depends(require("approve:models")),
-            db: Session = Depends(get_db)):
+def approve(vid: int, body: ApproveVersion, request: Request,
+            p: Principal = Depends(require_any("approve:models", "approve:matchers")), db: Session = Depends(get_db)):
     v = _get(db, vid)
+    _review_scope(db, v, p, request)
     _need(v, "in_review")
     _separate(v, p)
     n_warn = len((v.metrics_json or {}).get("warnings", []))
@@ -224,9 +241,10 @@ def approve(vid: int, body: ApproveVersion, request: Request, p: Principal = Dep
 
 
 @router.post("/models/versions/{vid}/reject", response_model=ModelVersionDetail)
-def reject(vid: int, body: RejectVersion, request: Request, p: Principal = Depends(require("approve:models")),
-           db: Session = Depends(get_db)):
+def reject(vid: int, body: RejectVersion, request: Request,
+           p: Principal = Depends(require_any("approve:models", "approve:matchers")), db: Session = Depends(get_db)):
     v = _get(db, vid)
+    _review_scope(db, v, p, request)
     _need(v, "in_review")
     _separate(v, p)
     v.status, v.reviewed_by_key_id, v.reviewed_at, v.review_notes = "rejected", p.key_id, utcnow(), body.review_notes.strip()
@@ -261,8 +279,9 @@ def retire(vid: int, body: RetireVersion, request: Request, p: Principal = Depen
     _sync_catalog(db, v.model_definition_id)
     db.commit()
     audit.record(db, "model.retired", principal=p, request=request, resource_type="model_version", resource_id=v.id)
-    if was_deployed:        # only a version that was being served matters to CNR
-        webhook.emit("withdrawn", db.get(ModelDefinition, v.model_definition_id).slug, v.version, v.id, reason="withdrawn")
+    d = db.get(ModelDefinition, v.model_definition_id)
+    if was_deployed and d.task_type != "matching":      # only a risk model that was being served matters to CNR
+        webhook.emit("withdrawn", d.slug, v.version, v.id, reason="withdrawn")
     return _out(db, v, detail=True)
 
 

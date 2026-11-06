@@ -24,7 +24,7 @@ It exists to turn nutrition data into usable intelligence for Malawi: research, 
 **Platform philosophy:** from nutrition data to machine-learning research, and from validated models to practical nutrition intelligence.
 
 ## Platform
-- **ML API** (`api/`, FastAPI): API-key authentication, four roles, audit log, full metadata schema (datasets, versions, experiments, model versions), a catalogue of the eighteen planned model targets, `/health`.
+- **ML API** (`api/`, FastAPI): API-key authentication, five roles (plus a machine key), audit log, full metadata schema (datasets, versions, experiments, model versions), a catalogue of the nineteen planned model targets, `/health`.
 - **Dashboard** (`dashboard/`, static HTML/JS, no build step): installable as an app (PWA), with overview, models, experiments, exploration, hotspots, datasets, registry, prediction, CNR integration, audit log and key management. Pages show honest empty states until there is data.
 - **Deployment**: Dockerfiles, `docker-compose.yml`, `render.yaml`, CI, Supabase RLS script.
 - It does not touch CNR's production API. The two will talk only through authenticated endpoints (see CNR integration below).
@@ -134,9 +134,10 @@ It exists to turn nutrition data into usable intelligence for Malawi: research, 
 - **Method:** character 2-4-gram TF-IDF similarity. A food is represented by its name, aliases and (learned matcher only) the labelled training queries. The score is a similarity, not a probability.
 - **Honest evaluation:** split by normalised query text so one written form never sits in train and test; a names-only matcher and an exact-match rule on the same hold-out rows; paired-bootstrap verdict (`learning_helps`, `learning_hurts`, `no_clear_difference`); queries that are already a registry name are reported apart, with a warning when they dominate; conflicting labels and unknown codes are dropped and counted.
 - **Review threshold:** chosen by cross-validation on the training part only, then checked once on the hold-out set. Below it, the query goes to a person.
-- **Governance:** not a catalogue model. No model file, no registry, no serving, no CNR announcement (`tests/test_matching.py` enforces the isolation). Results hold counts and rates only, never query text. Runs inside the request, capped at 50,000 labelled queries, one heavy job at a time.
+- **Governance of the evaluation:** `POST /v1/matching/evaluations` writes nothing and imports nothing from the registry or serving code (`tests/test_matching.py` enforces it). Results hold counts and rates only, never query text. Runs inside the request, capped at 50,000 labelled queries, one heavy job at a time.
 - **Endpoint:** `POST /v1/matching/evaluations` (data scientist or admin).
-- **Dashboard:** the **Matching** page (data scientist or admin) picks the two dataset versions and columns, runs the evaluation and shows scores, the learning verdict, the review-threshold table, group results and warnings. The result is not stored.
+- **Registering and serving (suggest-only):** `POST /v1/matching/candidates` re-runs the evaluation and registers the evaluated matcher (fitted on the training part, threshold chosen on training data) as a candidate of the `food-name-matching` catalogue slot, which is not trained as an experiment. It then follows the registry gate: submit, approve, deploy. **A clinical reviewer or the food registry's data owner (`registry_owner` role, which can review food-name matchers only) can approve; only an administrator deploys.** `POST /v1/matching/suggest` (data scientist, clinical reviewer, service or admin) takes up to 50 typed names and returns, in the same order, ranked candidate food codes with a similarity score, a margin and a `below_review_threshold` flag. It never assigns anything: every suggestion is for a person to confirm, and the score is not a probability. Only the deployed, hash-checked version is used; query text is never stored, logged or echoed (the audit log keeps counts). The matcher is hidden from `/v1/predict` and the CNR integration, and CNR is not notified when it changes. `GET /v1/matching/deployed` says whether one is live.
+- **Dashboard:** the **Matching** page (data scientist or admin) picks the two dataset versions and columns, runs the evaluation and shows scores, the learning verdict, the review-threshold table, group results and warnings (the result itself is not stored). From there a data scientist can register the matcher for review, and anyone allowed to call suggestions can try the deployed matcher on one name at a time. Matcher versions appear under Registry like any other model.
 
 ## District hotspots and prevalence trends (aggregated analysis)
 - **A separate type, not a model.** A *hotspot analysis* works on **counts per area (and period)**, never on individual children: the number with the condition, the number examined, and optionally a month or year and a centre point per area. Areas can be districts, facilities or communities. It supports the hotspot dashboard; no individual-level data is needed or accepted.
@@ -205,6 +206,7 @@ It exists to turn nutrition data into usable intelligence for Malawi: research, 
 | viewer | read catalogue, models, experiments, explorations, hotspot analyses, datasets (cannot call predictions) |
 | data_scientist | viewer + create datasets, upload versions, preview rows, create experiments, explorations and hotspot analyses, register and submit model versions |
 | clinical_reviewer | viewer + approve or reject models in review, read audit log |
+| registry_owner | viewer + approve or reject **food-name matchers** in review (nothing else; cannot deploy) |
 | service | read catalogue, call predictions and CNR assessments only (machine key for CNR) |
 | admin | everything, including keys, deploy, roll back, withdraw and the CNR integration status (still cannot review their own registrations) |
 

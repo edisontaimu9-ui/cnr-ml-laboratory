@@ -144,7 +144,7 @@
     const [models, sets] = await Promise.all([api("/v1/catalog"), api("/v1/datasets")]);
     const usable = sets.filter((d) => d.version_count > 0);
     if (!usable.length) return [h("h1", null, "New experiment"), empty("No dataset versions yet", "Create a dataset and upload a file under Datasets first.")];
-    const model = h("select", { id: "xm" }, [h("option", { value: "" }, "Choose a model…")].concat(models.map((m) => h("option", { value: m.slug }, m.name + " (" + m.task_type + ")"))));
+    const model = h("select", { id: "xm" }, [h("option", { value: "" }, "Choose a model…")].concat(models.filter((m) => m.task_type !== "matching").map((m) => h("option", { value: m.slug }, m.name + " (" + m.task_type + ")"))));
     const dset = h("select", { id: "xd" }, usable.map((d) => h("option", { value: d.id }, d.name)));
     const ver = h("select", { id: "xv" });
     const target = h("select", { id: "xt" });
@@ -518,15 +518,15 @@
     await loadQ(); await loadR();
     if (sets.length > 1) dr.selectedIndex = Math.min(1, sets.length - 1), await loadR();
 
+    const buildBody = () => ({ queries_dataset_id: Number(dq.value), queries_version: Number(vq.value), query_column: cQ.value, food_code_column: cF.value,
+      group_column: cG.value || null, registry_dataset_id: Number(dr.value), registry_version: Number(vr.value), registry_code_column: rC.value,
+      registry_label_column: rL.value, registry_aliases_column: rA.value || null, test_size: Number(tsz.value) / 100, seed: Number(seed.value),
+      top_k: Number(topk.value), target_accuracy: Number(tgt.value) / 100 });
     const go = h("button", { class: "primary", onclick: async () => {
       err.textContent = ""; out.replaceChildren();
       go.disabled = true;
       try {
-        const body = { queries_dataset_id: Number(dq.value), queries_version: Number(vq.value), query_column: cQ.value, food_code_column: cF.value,
-          group_column: cG.value || null, registry_dataset_id: Number(dr.value), registry_version: Number(vr.value), registry_code_column: rC.value,
-          registry_label_column: rL.value, registry_aliases_column: rA.value || null, test_size: Number(tsz.value) / 100, seed: Number(seed.value),
-          top_k: Number(topk.value), target_accuracy: Number(tgt.value) / 100 };
-        const res = await api("/v1/matching/evaluations", { method: "POST", body: JSON.stringify(body) });
+        const res = await api("/v1/matching/evaluations", { method: "POST", body: JSON.stringify(buildBody()) });
         out.replaceChildren(...matchingResults(res.results));
       } catch (e) { err.textContent = e.message; }
       go.disabled = false;
@@ -542,7 +542,51 @@
       h("details", { class: "card" }, h("summary", null, "Settings"),
         h("div", { class: "form3" }, field("Hold-out share (%)", tsz, "mts"), field("Candidates to score (top k)", topk, "mtk"), field("Target accuracy for review threshold (%)", tgt, "mta")),
         field("Random seed", seed, "mse")),
-      go, err, out];
+      go, err, out,
+      can("write:models") ? registerBox(buildBody) : null,
+      can("predict:models") ? await tryBox() : null];
+  }
+
+  function registerBox(buildBody) {
+    const use = h("textarea", { id: "mu", rows: 3, maxlength: 2000, placeholder: "Who will use the suggestions and for what, for example: help dietitians find the registry food for a typed food name when entering survey data." });
+    const err = h("p", { class: "error", role: "alert" });
+    const send = h("button", { onclick: async () => {
+      err.textContent = "";
+      if (use.value.trim().length < 20) { err.textContent = "Describe the intended use in at least 20 characters."; return; }
+      if (!confirm("Evaluate again with these settings and register the matcher as a candidate for review?")) return;
+      send.disabled = true;
+      try {
+        const r = await api("/v1/matching/candidates", { method: "POST", body: JSON.stringify({ ...buildBody(), intended_use: use.value.trim() }) });
+        location.hash = "registry";
+        alert("Registered as version " + r.version + " (candidate). Open it under Registry and submit it for review.");
+      } catch (e) { err.textContent = e.message; send.disabled = false; }
+    } }, "Evaluate and register as a candidate");
+    return h("details", { class: "card" }, h("summary", null, "Register this matcher for review"),
+      h("p", { class: "muted" }, "Registers the matcher that was evaluated (fitted on the training part, threshold chosen on training data). A clinical reviewer or the food registry owner approves it, then an administrator deploys it. It only ever suggests candidates for a person to confirm."),
+      field("Intended use", use, "mu"), send, err);
+  }
+
+  async function tryBox() {
+    let info = null;
+    try { info = await api("/v1/matching/deployed"); } catch { info = null; }
+    const head = h("h3", null, "Try the deployed matcher");
+    if (!info || !info.deployed) return h("div", null, head, h("p", { class: "muted" }, "No matcher is deployed yet. Register one, get it approved, then ask an administrator to deploy it."));
+    const q = h("input", { id: "mtq", maxlength: 120, placeholder: "Type a food name, for example kapenta" });
+    const res = h("div", null), err = h("p", { class: "error", role: "alert" });
+    const go = h("button", { onclick: async () => {
+      err.textContent = ""; res.replaceChildren();
+      if (!q.value.trim()) { err.textContent = "Type a food name first."; return; }
+      go.disabled = true;
+      try {
+        const r = await api("/v1/matching/suggest", { method: "POST", body: JSON.stringify({ queries: [q.value.trim()], top_k: 5 }) });
+        const x = r.results[0];
+        res.replaceChildren(h("p", { class: "muted" }, "Version " + r.model.version + ". Suggestions for a person to confirm; the similarity is not a probability."),
+          x.candidates.length ? table(["Food code", "Similarity"], x.candidates.map((c) => [c.food_code, c.similarity])) : h("p", null, "No suggestion for this text."),
+          x.below_review_threshold ? h("div", { class: "notice" }, "Below the review threshold: check this one carefully before using it.") : null);
+      } catch (e) { err.textContent = e.message; }
+      go.disabled = false;
+    } }, "Suggest food codes");
+    return h("div", null, head, h("p", { class: "muted" }, "Version " + info.model.version + " · approved by " + (info.model.approved_by || "—") + ". Typed text is not stored."), field("Food name", q, "mtq"), go, err, res);
   }
 
   function matchingResults(r) {
@@ -979,6 +1023,8 @@
   async function versionDetail(id) {
     const v = await api("/v1/models/versions/" + id);
     const m = v.metrics_json || {}, t = m.test || {}, b = m.baseline || {};
+    const isMatch = m.task === "matching";
+    const canReview = can("approve:models") || (isMatch && can("approve:matchers"));
     const back = () => { location.hash = "registry"; };
     const reload = () => show("registry/" + id);
     const run = (label, path, body, ask, cls) => h("button", { class: cls || "primary", onclick: async (ev) => {
@@ -988,21 +1034,22 @@
     } }, label);
     const out = [h("p", null, h("button", { class: "link", onclick: back }, "← Registry")),
       h("div", { class: "row" }, h("h1", null, (v.model_name || v.model_slug) + " · v" + v.version), vBadge(v.status)),
-      h("p", { class: "muted" }, "Experiment #" + v.experiment_id + " · registered by " + (v.created_by || "—") + " on " + fmt(v.created_at) + (v.artifact_sha256 ? " · file SHA-256 " + v.artifact_sha256.slice(0, 12) + "…" : "")),
-      h("div", { class: "notice" }, "Intended use: " + (v.intended_use || "—") + " Outputs are risk estimates to support clinical judgement, never confirmed diagnoses.")];
+      h("p", { class: "muted" }, (isMatch ? "Food-name matching evaluation" : "Experiment #" + v.experiment_id) + " · registered by " + (v.created_by || "—") + " on " + fmt(v.created_at) + (v.artifact_sha256 ? " · file SHA-256 " + v.artifact_sha256.slice(0, 12) + "…" : "")),
+      h("div", { class: "notice" }, "Intended use: " + (v.intended_use || "—") + " " + (isMatch ? "Output is a list of suggestions for a person to confirm, never an automatic assignment." : "Outputs are risk estimates to support clinical judgement, never confirmed diagnoses."))];
     (m.warnings || []).forEach((w) => out.push(h("div", { class: "notice" }, w)));
     const stat = (l, x, sub) => h("div", { class: "stat" }, h("b", null, x), h("span", null, l + (sub ? " · " + sub : "")));
     out.push(h("h2", null, "Evaluation (frozen at registration)"));
-    out.push(h("div", { class: "stats" }, m.task === "classification"
+    if (isMatch) out.push(...matchingResults({ ...m, warnings: [] }).slice(1));
+    else out.push(h("div", { class: "stats" }, m.task === "classification"
       ? [stat("Macro F1", n3(t.macro_f1), "95% range " + n3(t.macro_f1_ci95 && t.macro_f1_ci95[0]) + "–" + n3(t.macro_f1_ci95 && t.macro_f1_ci95[1])), stat("Baseline macro F1", n3(b.macro_f1)), stat("Balanced accuracy", pct(t.balanced_accuracy)), stat("Test rows", m.n_test)]
       : [stat("R²", n3(t.r2), "baseline " + n3(b.r2)), stat("RMSE", n3(t.rmse)), stat("Test rows", m.n_test)]));
-    out.push(h("p", null, h("button", { class: "link", onclick: () => { location.hash = "experiments/" + v.experiment_id; } }, "Open the full experiment report")));
+    if (!isMatch) out.push(h("p", null, h("button", { class: "link", onclick: () => { location.hash = "experiments/" + v.experiment_id; } }, "Open the full experiment report")));
 
     // actions
     const act = [];
     if (v.status === "candidate" && can("write:models")) act.push(h("p", null, run("Submit for clinical review", "/v1/models/versions/" + id + "/submit", {}, "Submit this version for clinical review?")));
-    if (v.status === "in_review" && can("approve:models")) act.push(reviewForm(v, reload));
-    if (v.status === "in_review" && !can("approve:models")) act.push(h("div", { class: "notice" }, "Waiting for a clinical reviewer."));
+    if (v.status === "in_review" && canReview) act.push(reviewForm(v, reload));
+    if (v.status === "in_review" && !canReview) act.push(h("div", { class: "notice" }, isMatch ? "Waiting for a clinical reviewer or the food registry owner." : "Waiting for a clinical reviewer."));
     if ((v.status === "approved" || (v.status === "retired" && (v.retired_reason || "") === "superseded")) && can("deploy:models"))
       act.push(h("p", null, run("Deploy this version", "/v1/models/versions/" + id + "/deploy", {}, "Mark v" + v.version + " as the version to serve? The current one will be retired.")));
     if (v.status === "deployed" && can("deploy:models")) act.push(h("p", { class: "inline" },
@@ -1195,7 +1242,7 @@
   async function access() {
     const out = h("div");
     const name = h("input", { id: "kn", maxlength: 120 });
-    const role = h("select", { id: "kr" }, ["viewer", "data_scientist", "clinical_reviewer", "service", "admin"].map((r) => h("option", { value: r }, r)));
+    const role = h("select", { id: "kr" }, ["viewer", "data_scientist", "clinical_reviewer", "registry_owner", "service", "admin"].map((r) => h("option", { value: r }, r)));
     const err = h("p", { class: "error", role: "alert" });
     const create = h("button", { class: "primary", onclick: async () => {
       err.textContent = "";

@@ -18,6 +18,8 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
     "viewer": _VIEW,
     "data_scientist": _VIEW | {"write:datasets", "write:experiments", "write:explorations", "write:hotspots", "read:dataset_rows", "write:models", "predict:models"},
     "clinical_reviewer": _VIEW | {"approve:models", "read:audit", "predict:models"},
+    # Food registry data owner: may review food-name matchers only (enforced in the registry router), nothing else.
+    "registry_owner": _VIEW | {"approve:matchers"},
     # Machine key for the CNR integration: can list the catalogue and call predictions, nothing else.
     "service": {"read:catalog", "read:models", "predict:models"},
     "admin": _VIEW | {"write:datasets", "write:experiments", "write:explorations", "write:hotspots", "read:dataset_rows", "write:models", "approve:models",
@@ -80,6 +82,18 @@ def get_principal(request: Request, db: Session = Depends(get_db),
     row.last_used_at = utcnow()
     db.commit()
     return Principal(key_id=row.id, name=row.name, role=row.role)
+
+
+def require_any(*permissions: str):
+    """Allow a principal holding at least one of the permissions. Callers narrow further where needed."""
+    def dep(request: Request, principal: Principal = Depends(get_principal),
+            db: Session = Depends(get_db)) -> Principal:
+        if not set(permissions) & principal.permissions:
+            audit.record(db, "auth.forbidden", principal=principal, request=request,
+                         detail={"permission": " or ".join(permissions), "path": request.url.path})
+            raise HTTPException(403, f"Your role cannot perform this action ({' or '.join(permissions)}).")
+        return principal
+    return dep
 
 
 def require(permission: str):

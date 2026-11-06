@@ -36,6 +36,8 @@ def _live(db: Session, slug: str) -> tuple[ModelDefinition, ModelVersion]:
         d, v = serving.deployed(db, slug)
     except serving.ServingError as e:
         raise HTTPException(e.status, e.message)
+    if d.task_type == "matching":
+        raise HTTPException(422, "This is the food-name matcher, which gives suggestions rather than predictions. Use POST /v1/matching/suggest.")
     if v is None:
         raise HTTPException(409, "No approved model is deployed for this target, so no prediction can be made.")
     return d, v
@@ -46,7 +48,7 @@ def available(db: Session = Depends(get_db)):
     """Models that are currently deployed and can be called."""
     rows = db.execute(select(ModelDefinition, ModelVersion).join(
         ModelVersion, ModelVersion.model_definition_id == ModelDefinition.id)
-        .where(ModelVersion.status == "deployed").order_by(ModelDefinition.id)).all()
+        .where(ModelVersion.status == "deployed", ModelDefinition.task_type != "matching").order_by(ModelDefinition.id)).all()
     return {"safety_notice": SAFETY_NOTICE, "models": [_model_block(d, v) for d, v in rows]}
 
 

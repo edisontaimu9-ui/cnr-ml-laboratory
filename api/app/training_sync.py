@@ -97,6 +97,10 @@ SOURCES: dict[str, Source] = {
     "malnutrition-prolonged-stay-risk": Source(reason=_NO_INDIVIDUAL.format(what="hospital admission or length-of-stay records")),
     "malnutrition-readmission-risk": Source(reason=_NO_INDIVIDUAL.format(what="discharge or readmission records")),
     "weight-loss-trajectory": Source(reason=_NO_INDIVIDUAL.format(what="follow-up weight records")),
+    "food-name-matching": Source(
+        reason=("The labelled queries this matcher learns from (typed food names with the correct registry food code) are not part of CNR's "
+                "screening data. They come from food registry search logs reviewed by a person and are uploaded as a dataset, then evaluated "
+                "and registered under /v1/matching rather than trained as an experiment.")),
 }
 
 

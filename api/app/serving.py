@@ -76,6 +76,9 @@ def categories(bundle: dict) -> dict[str, list[str]]:
 
 
 def headline(m: dict) -> dict:
+    if m.get("task") == "matching":
+        return {"metric": "top1", "test": (m.get("learned") or {}).get("top1"), "baseline": (m.get("names_only") or {}).get("top1"),
+                "n_test": m.get("n_test"), "warnings": len(m.get("warnings", [])), "rmse": None}
     t, b = m.get("test", {}), m.get("baseline", {})
     key = "macro_f1" if m.get("task") == "classification" else "r2"
     return {"metric": key, "test": t.get(key), "baseline": b.get(key), "n_test": m.get("n_test"),

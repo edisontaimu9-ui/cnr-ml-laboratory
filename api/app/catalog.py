@@ -48,6 +48,8 @@ CATALOG = [
      "Estimate malnutrition risk at hospital admission to support screening."),
     ("food-insecurity-prediction", "Food insecurity", "classification",
      "Estimate household food insecurity from socioeconomic and agricultural context."),
+    ("food-name-matching", "Food-name matching", "matching",
+     "Suggest registry food codes for free-text food names (English, Chichewa, local or colloquial). Suggestions for a person to confirm, never automatic assignments."),
     ("nutritional-outcome-prediction", "Nutritional outcome", "regression",
      "Predict nutritional outcomes (for example weight change or recovery time) after intervention."),
 ]
@@ -123,6 +125,12 @@ LABEL_NOTES = {
 }
 
 LABEL_NOTES.update({
+    "food-name-matching": (
+        "Labels are the correct registry food code for each typed query, assigned by a person who knows the foods (for example a dietitian reviewing "
+        "search logs). Queries generated from the registry's own names or aliases make scores look better than they are; use queries typed by people. "
+        "This is not trained as an experiment: it is evaluated and registered under /v1/matching. Output is a ranked list of candidates for a person to "
+        "confirm, with a similarity score that is not a probability. Nothing is assigned automatically."
+    ),
     "refeeding-syndrome-risk": (
         "Label from measured electrolytes after nutrition support is started or substantially increased, using one definition for every row: "
         "for example the ASPEN 2020 consensus criteria (a fall in serum phosphate, potassium or magnesium of 10% or more from the pre-feeding value "

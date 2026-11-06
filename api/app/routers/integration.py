@@ -44,7 +44,7 @@ def models(db: Session = Depends(get_db)):
     """Deployed models with the feature contract CNR must follow when sending cases."""
     rows = db.execute(select(ModelDefinition, ModelVersion).join(
         ModelVersion, ModelVersion.model_definition_id == ModelDefinition.id)
-        .where(ModelVersion.status == "deployed").order_by(ModelDefinition.id)).all()
+        .where(ModelVersion.status == "deployed", ModelDefinition.task_type != "matching").order_by(ModelDefinition.id)).all()
     out = []
     for d, v in rows:
         block = predict_router._model_block(d, v)

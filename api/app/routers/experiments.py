@@ -74,6 +74,8 @@ def create_experiment(body: ExperimentCreate, request: Request, background: Back
     v = db.scalars(q.limit(1)).first()
     if v is None or not v.storage_uri:
         raise HTTPException(404, "Unknown dataset version.")
+    if d.task_type == "matching":
+        raise HTTPException(422, "Food-name matching is evaluated and registered under /v1/matching, not as an experiment.")
     if body.algorithm == "logistic" and d.task_type != "classification":
         raise HTTPException(422, "Logistic regression is for classification models only. Choose XGBoost or a neural network for this model.")
     cols = {c["name"] for c in (v.schema_info_cols())}

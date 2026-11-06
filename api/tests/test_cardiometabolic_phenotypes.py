@@ -111,7 +111,7 @@ def test_unknown_preset_is_refused(client, clean):
 
 def test_phenotypes_are_invisible_to_the_catalogue_registry_and_service_role(client, clean):
     explore(client, clean, preset="cardiometabolic")
-    assert client.get("/v1/overview", headers=ADMIN).json()["counts"]["model_definitions"] == 18
+    assert client.get("/v1/overview", headers=ADMIN).json()["counts"]["model_definitions"] == 19
     slugs = {m["slug"] for m in client.get("/v1/catalog", headers=ADMIN).json()}
     assert not any("phenotype" in s or "cardiometabolic" in s for s in slugs)
     assert client.get("/v1/models/versions", headers=ADMIN).json() == []
