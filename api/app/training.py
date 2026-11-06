@@ -82,15 +82,27 @@ class Config:
     logistic_c: float = 1.0                    # logistic only: inverse L2 strength (smaller = stronger penalty)
     leakage_tokens: list[str] = field(default_factory=list)      # column-name words that may not be features (see catalog.py)
     leakage_substrings: list[str] = field(default_factory=list)  # same, for run-together names such as "bloodpressure"
+    leakage_exempt: list[str] = field(default_factory=list)      # name parts that make a column NOT count as leaky (see catalog.py)
     warn_substrings: list[str] = field(default_factory=list)     # label-definition features that are allowed but warned about
     warn_note: str = ""                                          # reason shown for them; "" = the label-definition text
     calibration: str = "none"                  # logistic only: none | sigmoid | isotonic (recalibration is opt-in, see _calibration_verdict)
 
 
-def _is_leaky(col: str, cfg: Config) -> bool:
+def _name_hit(sub: str, words: set[str], flat: str) -> bool:
+    """Short strings (3 characters or fewer, such as 'bmi') match whole words only, so 'submission' does not match 'bmi'."""
+    return sub in words if len(sub) <= 3 else sub in flat
+
+
+def _name_parts(col: str) -> tuple[set[str], str]:
     low = col.lower()
-    words = {w for w in re.split(r"[^a-z0-9]+", low) if w}
-    return bool(words & set(cfg.leakage_tokens)) or any(sub in low.replace("_", "").replace(" ", "") for sub in cfg.leakage_substrings)
+    return {w for w in re.split(r"[^a-z0-9]+", low) if w}, low.replace("_", "").replace(" ", "")
+
+
+def _is_leaky(col: str, cfg: Config) -> bool:
+    words, flat = _name_parts(col)
+    if any(x in flat for x in cfg.leakage_exempt):      # e.g. mother's BMI or birth weight are not the child's own measurement
+        return False
+    return bool(words & set(cfg.leakage_tokens)) or any(_name_hit(sub, words, flat) for sub in cfg.leakage_substrings)
 
 
 def _prepare(df: pd.DataFrame, cfg: Config, warnings: list[str]):
@@ -113,7 +125,8 @@ def _prepare(df: pd.DataFrame, cfg: Config, warnings: list[str]):
     if banned:
         raise TrainingError(f"'{banned[0][:60]}' defines or reveals this model's label and cannot be a feature. "
                             "Exclude it (and any other blood pressure or diagnosis columns) and run again.")
-    overlap = [c for c in cand if any(sub in c.lower().replace("_", "").replace(" ", "") for sub in cfg.warn_substrings)]
+    overlap = [c for c in cand if any(_name_hit(sub, *_name_parts(c)) for sub in cfg.warn_substrings)
+               and not any(x in _name_parts(c)[1] for x in cfg.leakage_exempt)]
     if overlap:
         warnings.append(cfg.warn_note.format(col=overlap[0][:60]) if cfg.warn_note else
                         f"'{overlap[0][:60]}' is part of this model's label definition. It is allowed because it is the cheap measurement the "

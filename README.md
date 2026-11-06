@@ -5,7 +5,7 @@ An independent machine-learning platform for the Chakudya Nutrition Registry (CN
 You can upload and de-identify datasets, train and evaluate models, review and approve them, serve the deployed version, and let CNR request assessments through a dedicated, authenticated contract. Predictions are never presented as confirmed diagnoses.
 
 ## Platform
-- **ML API** (`api/`, FastAPI): API-key authentication, four roles, audit log, full metadata schema (datasets, versions, experiments, model versions), a catalogue of the twelve planned model targets, `/health`.
+- **ML API** (`api/`, FastAPI): API-key authentication, four roles, audit log, full metadata schema (datasets, versions, experiments, model versions), a catalogue of the fourteen planned model targets, `/health`.
 - **Dashboard** (`dashboard/`, static HTML/JS, no build step): installable as an app (PWA), with overview, models, experiments, exploration, hotspots, datasets, registry, prediction, CNR integration, audit log and key management. Pages show honest empty states until there is data.
 - **Deployment**: Dockerfiles, `docker-compose.yml`, `render.yaml`, CI, Supabase RLS script.
 - It does not touch CNR's production API. The two will talk only through authenticated endpoints (see CNR integration below).
@@ -58,6 +58,14 @@ You can upload and de-identify datasets, train and evaluate models, review and a
 - **Label:** calculated from Fenton reference values by CNR or the Chakudya API's deterministic Fenton calculations, not re-implemented here: for example a fall in weight z-score of at least 1.0 from birth to discharge or 36 weeks postmenstrual age, or weight under the 10th percentile at that point. The data owner agrees the definition and time point first, and every row must use the same one.
 - **Leakage guard:** discharge or follow-up weights, later z-scores or percentiles, z-score change, growth velocity, weight gain, and faltering/EUGR columns are **refused as features**. Birth weight, gestational age and birth z-score are allowed (they are known early). Birth z-score is expected to matter because a larger baby has further to fall.
 - **Small samples:** neonatal-unit datasets are usually small; the usual small-dataset, baseline and confidence-range warnings apply and should be taken seriously.
+
+## Adolescent / school-age overweight and stunting risk (`school-age-overweight-risk`, `school-age-stunting-risk`)
+- **Purpose:** estimate which children and adolescents aged 5 to 19 are at risk of overweight or of stunting, from household, diet, activity and early-life context. Two separate models because the labels, and the measurements that give them away, differ. A positive result means *review growth and diet*, never a diagnosis.
+- **Labels:** BMI-for-age z-score above +1 SD (overweight, includes obesity) or height-for-age z-score below -2 SD, on the WHO 2007 reference for 61 to 228 months. They are calculated by CNR or the Chakudya API's deterministic growth calculations, not re-implemented here. Younger children need the under-five tools.
+- **Leakage guard:** the child's own weight, height, BMI, z-scores, percentiles and nutrition-status columns are **refused as features** for the overweight model; height, height stand-ins (knee height, ulna, demi-span, arm span), z-scores and stunting columns for the stunting model. Mother's and parents' measurements and birth weight are exempt (name contains mother, maternal, father, paternal, parent, caregiver, sibling or birth).
+- **Allowed with a warning:** waist and similar body-size measures (overweight model); weight, BMI, MUAC, waist and head circumference (stunting model, only if height is not measured where the model is used).
+- **Naming:** the upload step treats column names containing mother, father, guardian or caregiver as possible personal names and drops them unless kept with a reason. Name parent measurements `maternal_bmi`, `parental_height_cm` and so on.
+- **Name matching:** column-name fragments of three characters or fewer (such as `bmi`) match whole words only, so a column like `submission_date` is not caught.
 
 ## Exploration (unsupervised analysis)
 - **A separate type, not a model.** An *exploration* looks for groups of similar rows (**clustering**, k-means) and unusual rows (**anomaly detection**, isolation forest) in a de-identified dataset version. There is no target column and no catalogue model. It is for understanding data and checking data quality.
