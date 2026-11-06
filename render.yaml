@@ -35,6 +35,9 @@ services:
         value: "true"
       - key: SURVEILLANCE_API_KEY
         sync: false
+      # Record-level (de-identified) training rows from CNR: opt in deliberately.
+      - key: TRAINING_SYNC_ENABLED
+        value: "false"
   - type: web
     name: cnr-ml-lab-dashboard
     runtime: static

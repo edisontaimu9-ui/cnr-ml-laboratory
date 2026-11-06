@@ -140,6 +140,16 @@ You can upload and de-identify datasets, train and evaluate models, review and a
 - **Dashboard:** a **Surveillance sync from CNR** section on the CNR integration page with the last run and a *Sync now* button.
 - **Needs:** the CNR API with `GET /surveillance/export` deployed, and an always-on API service (the schedule runs inside the API; the first run is 2 minutes after start).
 
+## Automatic training-data sync (CNR to laboratory)
+- **What it does:** every `TRAINING_SYNC_INTERVAL_HOURS` (default 24) the API fetches CNR's `GET /surveillance/training-export` (one row per screened person: month, district, region, sex, age band, setting and WHO-classified indicator statuses) and stores each change as a new de-identified dataset version, named `cnr-training-<model>`, ready for an experiment. It only fetches data: it never trains, registers or deploys a model.
+- **Which models:** every model in the catalogue is registered in `app/training_sync.py`, and a model is fed only when CNR really holds the data it needs. Today that is **`child-malnutrition-risk`** (CNR's under-5 screening rows). The others are listed with the reason CNR cannot supply them yet (CNR keeps no raw measurements, clinical, hospital or follow-up records); they gain a source with one registry entry once CNR stores that data. CNR discards raw weight, length and MUAC, so anthropometry is not available as a feature.
+- **Target and leakage:** the label `any_undernutrition` is yes when stunting, wasting or underweight is moderate or severe (CNR's WHO classification, not recomputed here). Those three and the statuses taken from the same measurements (MUAC, acute malnutrition, oedema, overweight) are suggested exclusions: training on them reads the answer (perfect score), and the lab's leakage guard flags it. The experiment form fills in the target and exclusions when you pick the model and its synced dataset.
+- **Privacy:** CNR sends a row only when at least its minimum number of rows (default 10) share the same month, district, sex, age band and setting, and sends no IDs, app labels or timestamps. Datasets are marked `confidential`. Repeated rows are kept (coarse records repeat by nature; removing them would erase the frequencies a model learns from). It is **off by default**; enable it only where you are entitled to use this programme data for model development. The data are programme screening records, not a random survey, so a model trained on them describes who is screened, not the whole population.
+- **Safe by design:** the same rules as the surveillance sync: the address comes only from `CNR_API_BASE_URL`, redirects are refused, the key (`SURVEILLANCE_API_KEY`, shared) goes only as a Bearer header and is never logged, audited or shown. An unchanged export makes no new version. Off until `TRAINING_SYNC_ENABLED=true` and the key is set.
+- **Endpoints (admin):** `GET /v1/sync/training` (every model, its source or why not, the dataset it fills, the last run), `POST /v1/sync/training/run` (sync now, 202). Audited as `training_sync.started` and `training_sync.completed`.
+- **Dashboard:** a **Training data sync from CNR** section on the CNR integration page, with a *Sync now* button.
+- **Needs:** the CNR API with `GET /surveillance/training-export` deployed and `sql/050_add_surveillance_training_rows.sql` run in Supabase, and an always-on API service (first run 3 minutes after start).
+
 ## Model registry
 - **Registry:** a completed experiment can be registered as an immutable model version. The model file is copied, hashed (SHA-256) and the evaluation is frozen with it, together with the written intended use.
 - **Review gate:** `candidate → in review → approved | rejected`. Approval needs a clinical reviewer, a reference to the external validation evidence, written review notes and, when the evaluation carries warnings, an explicit acknowledgement. Rejection is final for that version.
@@ -168,7 +178,7 @@ You can upload and de-identify datasets, train and evaluate models, review and a
 - **Dashboard:** new **CNR integration** page (admin).
 - **Docs:** [docs/CNR_INTEGRATION.md](docs/CNR_INTEGRATION.md) has the contract and a worked example for the calling side.
 - **Lab -> CNR events:** when a model is deployed, rolled back or withdrawn, the lab sends CNR a signed webhook (`CNR_WEBHOOK_URL`, `CNR_WEBHOOK_SECRET`; HMAC-SHA256, three attempts, audited as `integration.notify`, no patient data). The CNR side is `chakudya-api` v1.83.0: `GET /ml/status`, `GET /ml/models`, `POST /ml/assess/{slug}` and `POST /hooks/ml-lab`.
-- CNR's own nutrition calculations stay in CNR. The lab pulls no patient records from CNR, only aggregated surveillance counts (see *Automatic surveillance sync*), and pushes it nothing except signed model-status events.
+- CNR's own nutrition calculations stay in CNR. The lab pulls no patient records from CNR. It pulls aggregated surveillance counts (see *Automatic surveillance sync*) and, only if you enable it, de-identified, size-suppressed screening rows for model training (see *Automatic training-data sync*), and pushes CNR nothing except signed model-status events.
 
 ## Roles
 | Role | Can |

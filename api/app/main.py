@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select
 
-from . import surveillance_sync
+from . import surveillance_sync, training_sync
 from .catalog import CATALOG, LABEL_NOTE, LABEL_NOTES
 from .config import get_settings
 from .db import Base, SessionLocal, add_missing_columns, engine
@@ -60,11 +60,15 @@ async def lifespan(_: FastAPI):
     add_missing_columns()
     _seed()
     _fail_interrupted()
-    task = asyncio.create_task(surveillance_sync.scheduler(settings)) if surveillance_sync.config_problem(settings) is None else None
+    tasks = []
+    if surveillance_sync.config_problem(settings) is None:
+        tasks.append(asyncio.create_task(surveillance_sync.scheduler(settings)))
+    if training_sync.config_problem(settings) is None:
+        tasks.append(asyncio.create_task(training_sync.scheduler(settings)))
     try:
         yield
     finally:
-        if task is not None:
+        for task in tasks:
             task.cancel()
 
 

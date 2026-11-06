@@ -145,10 +145,28 @@
     const cmpBox = h("div", { hidden: true }, h("label", { for: "xc" }, "Compare against XGBoost"), cmp);
     algo.addEventListener("change", () => { xgbBox.hidden = algo.value !== "xgboost"; mlpBox.hidden = algo.value !== "mlp"; lrBox.hidden = algo.value !== "logistic"; cmpBox.hidden = algo.value === "xgboost"; });
     const cols = () => (versions.find((v) => String(v.version) === ver.value) || { schema_info: { columns: [] } }).schema_info.columns || [];
+    // Models fed by the CNR training sync come with a suggested target and the columns that define it. Only admins can read the sync status.
+    const train = await api("/v1/sync/training").catch(() => null);
+    const hint = h("p", { class: "muted", role: "status" });
+    const suggestion = () => {
+      const m = train && train.models.find((x) => x.slug === model.value);
+      const d = usable.find((x) => String(x.id) === dset.value);
+      return m && m.available && d && d.name === m.dataset_name ? m : null;
+    };
+    const applySuggestion = () => {
+      const m = suggestion();
+      hint.textContent = "";
+      if (!m || !cols().some((c) => c.name === m.target)) return;
+      target.value = m.target;
+      drawExcl();
+      excl.querySelectorAll("input").forEach((i) => { i.checked = m.exclude.includes(i.value); });
+      hint.textContent = "Filled in from the CNR sync: predict " + m.target + " and leave out " + m.exclude.join(", ") + ", which the label is calculated from. Change them if you know better.";
+    };
     const drawCols = () => {
       const prev = target.value, names = cols().map((c) => c.name);
       target.replaceChildren(h("option", { value: "" }, "Choose the column to predict…"), ...names.map((n) => h("option", { value: n, selected: n === prev }, n)));
       drawExcl();
+      applySuggestion();
     };
     const drawExcl = () => excl.replaceChildren(...cols().filter((c) => c.name !== target.value).map((c) =>
       h("label", { class: "chk" }, h("input", { type: "checkbox", value: c.name }), " " + c.name)));
@@ -158,7 +176,7 @@
       ver.replaceChildren(...versions.map((v) => h("option", { value: v.version }, "v" + v.version + " (" + v.row_count + " rows)")));
       drawCols();
     };
-    dset.addEventListener("change", loadVersions); ver.addEventListener("change", drawCols); target.addEventListener("change", drawExcl);
+    dset.addEventListener("change", loadVersions); ver.addEventListener("change", drawCols); target.addEventListener("change", drawExcl); model.addEventListener("change", applySuggestion);
     await loadVersions();
     const go = h("button", { class: "primary", onclick: async () => {
       err.textContent = "";
@@ -182,7 +200,7 @@
     return [h("p", null, h("button", { class: "link", onclick: () => { location.hash = "experiments"; } }, "← All experiments")), h("h1", null, "New experiment"),
       h("div", { class: "notice" }, "Exclude every column the label is calculated from (for a nutrition status: MUAC, weight-for-height, z-scores). Leaving them in gives a near-perfect score that means nothing in practice."),
       h("div", { class: "form3" }, field("Model", model, "xm"), field("Dataset", dset, "xd"), field("Version", ver, "xv"), field("Target column (what to predict)", target, "xt")),
-      h("label", null, "Columns to leave out of training"), excl,
+      hint, h("label", null, "Columns to leave out of training"), excl,
       h("details", { class: "card" }, h("summary", null, "Training settings"),
         h("div", { class: "form3" }, field("Algorithm", algo, "xa")), xgbBox, mlpBox, lrBox, cmpBox,
         h("div", { class: "form3" }, field("Test share", tsz, "xts"), field("Random seed", seed, "xs"),
@@ -765,9 +783,49 @@
     return h("div", null, h("h2", null, "Surveillance sync from CNR"), box, h("p", null, btn), note);
   }
 
+  const trainText = { new_version: "new version", unchanged: "no change", no_data: "no data yet", no_source: "no CNR source yet", error: "failed" };
+
+  function trainingSyncSection(ty) {
+    const box = h("div"), note = h("p", { class: "muted", role: "status" });
+    const draw = (st) => {
+      const lr = st.last_run;
+      box.replaceChildren(
+        st.configured
+          ? h("p", null, "Pulls de-identified, record-level training data (last " + st.months + " months) from " + st.source + " every " + st.interval_hours + " h and stores each change as a new dataset version. It only fetches data: it never trains, registers or deploys a model.")
+          : h("div", { class: "notice" }, st.problem + " To switch it on, set TRAINING_SYNC_ENABLED=true on the API service (it uses the same SURVEILLANCE_API_KEY)."),
+        lr ? h("p", { class: "muted" }, "Last run: " + (lr.trigger === "manual" ? "started by an admin" : "scheduled") + ", " + (lr.state === "running" ? "running now" : lr.state.replace(/_/g, " ")) + (lr.finished_at ? " at " + fmt(lr.finished_at) : "") + (lr.error ? ". " + lr.error : "") + ".") : null,
+        table(["Model", "What CNR can supply", "Dataset", "Last result"], st.models.map((m) => {
+          const r = m.last_result;
+          return [m.name,
+            m.available ? h("div", null, "Under-5 screening rows. Predict " + m.target + ".", h("div", { class: "muted" }, "Leave out: " + m.exclude.join(", "))) : h("div", { class: "muted" }, "Not yet. " + m.reason),
+            m.dataset_name ? m.dataset_name + (m.latest_version ? " v" + m.latest_version : "") : "—",
+            r ? h("div", null, (trainText[r.status] || r.status) + (r.error ? ": " + r.error : ""),
+              r.label_counts ? h("div", { class: "muted" }, Object.entries(r.label_counts).map(([k, v]) => k + " " + v).join(", ") + (r.ready_to_train === false ? ". Not ready to train: " + r.not_ready_reason : ". Ready to train.")) : null) : "—"];
+        })));
+    };
+    const btn = h("button", { class: "primary", disabled: !ty.configured, onclick: async () => {
+      btn.disabled = true; note.textContent = "Starting…";
+      try {
+        await api("/v1/sync/training/run", { method: "POST" });
+        for (let i = 0; i < 40; i++) {
+          await new Promise((r) => setTimeout(r, 3000));
+          const st = await api("/v1/sync/training");
+          draw(st);
+          if (!st.running) break;
+          note.textContent = "Syncing…";
+        }
+        note.textContent = "Done.";
+      } catch (e) { note.textContent = e.message; }
+      finally { btn.disabled = !ty.configured; }
+    } }, "Sync now");
+    draw(ty);
+    return h("div", null, h("h2", null, "Training data sync from CNR"), box, h("p", null, btn), note);
+  }
+
   async function integrationPage() {
     const s = await api("/v1/integration/cnr/status");
     const sy = await api("/v1/sync/surveillance").catch(() => null);
+    const ty = await api("/v1/sync/training").catch(() => null);
     const out = h("div"), probeOut = h("p", { class: "muted", role: "status" });
     const c = s.cnr_api;
     const probeBtn = h("button", { class: "primary", disabled: !c.configured, onclick: async () => {
@@ -792,6 +850,7 @@
         : h("div", { class: "notice" }, s.webhook.problem + " CNR will still learn the truth on each assessment, but will not be told when a model changes."),
       h("h2", null, "Service keys"));
     if (sy) out.append(syncSection(sy));
+    if (ty) out.append(trainingSyncSection(ty));
     if (!s.service_keys.length) out.append(empty("No service key yet", "Create a key with the service role under Access and store it only as a secret in CNR."));
     else out.append(table(["Name", "Prefix", "Created", "Last used"], s.service_keys.map((k) => [k.name, k.prefix, fmt(k.created_at), fmt(k.last_used_at)])));
     if (!s.deployed_models) out.append(h("div", { class: "notice" }, "No model is deployed, so CNR assessments are refused with a clear message."));

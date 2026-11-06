@@ -30,6 +30,15 @@ class Settings(BaseSettings):
     surveillance_sync_approval_ref: str = "CNR surveillance aggregate export (automatic)"
     surveillance_fetch_timeout_s: float = 60.0
     surveillance_fetch_max_mb: int = 5
+    # CNR -> lab: automatic pull of record-level, de-identified TRAINING data for catalogue models
+    # (GET {CNR_API_BASE_URL}/surveillance/training-export). Uses the same CNR admin key (SURVEILLANCE_API_KEY).
+    # "all" syncs every model that has a CNR source; or list slugs, comma separated.
+    training_sync_enabled: bool = False
+    training_sync_models: str = "all"
+    training_sync_interval_hours: float = 24.0
+    training_sync_months: int = 12
+    training_sync_approval_ref: str = "CNR de-identified training export (automatic)"
+    training_fetch_max_mb: int = 20
     service_version: str = "0.8.0"
     # Dataset ingestion
     dataset_storage_dir: str = "./data/datasets"

@@ -20,6 +20,8 @@ To rotate the key, create a new service key, update CNR's secret, then revoke th
 
 **Automatic surveillance sync.** To feed the hotspot analysis from CNR without uploading files: deploy the CNR API with `GET /surveillance/export` (`npx wrangler deploy`), then on Render set `SURVEILLANCE_API_KEY` to a CNR admin key (`SURVEILLANCE_SYNC_ENABLED` is already `true` in `render.yaml`; `CNR_API_BASE_URL` is the CNR address). Redeploy, open **CNR integration** and press *Sync now* under *Surveillance sync from CNR*. Targets, window and interval are `SURVEILLANCE_SYNC_TARGETS`, `SURVEILLANCE_SYNC_MONTHS` and `SURVEILLANCE_SYNC_INTERVAL_HOURS`.
 
+**Automatic training-data sync (opt-in).** To fetch training data for models from CNR: run `sql/050_add_surveillance_training_rows.sql` in the CNR Supabase project (after 037), deploy the CNR API with `GET /surveillance/training-export`, then on Render set `TRAINING_SYNC_ENABLED=true` (it reuses `SURVEILLANCE_API_KEY`). Redeploy, open **CNR integration** and press *Sync now* under *Training data sync from CNR*. `TRAINING_SYNC_MODELS` (default `all`; models without a CNR source are reported, not fetched), `TRAINING_SYNC_MONTHS` and `TRAINING_SYNC_INTERVAL_HOURS` tune it. CNR's `SURVEILLANCE_MIN_CELL` sets the smallest group it will release.
+
 ## 3. Cloudflare DNS
 Add CNAME records (proxied): `ml` → your API's `*.onrender.com` host, `ml-lab` → the dashboard's `*.onrender.com` host. Add the same custom domains in each Render service's Settings → Custom Domains.
 

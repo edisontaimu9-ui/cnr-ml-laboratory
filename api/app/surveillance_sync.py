@@ -83,12 +83,14 @@ def export_url(s: Settings, group: str, indicator: str) -> str:
     return s.cnr_api_base_url.rstrip("/") + "/surveillance/export?" + q
 
 
-def fetch_csv(s: Settings, group: str, indicator: str) -> bytes:
-    """One authenticated GET of the CNR export. Raises SyncError with a short, key-free message."""
-    req = urllib.request.Request(export_url(s, group, indicator), method="GET", headers={
+def get_csv(s: Settings, url: str, max_mb: int | None = None) -> bytes:
+    """One authenticated GET of a CNR export (the URL is built from CNR_API_BASE_URL by the caller, never from a request).
+    The key goes only in the Bearer header; redirects are refused. Raises SyncError with a short, key-free message."""
+    req = urllib.request.Request(url, method="GET", headers={
         "Authorization": "Bearer " + s.surveillance_api_key.strip(), "Accept": "text/csv",
         "User-Agent": "cnr-ml-lab/" + s.service_version})
-    limit = s.surveillance_fetch_max_mb * 1024 * 1024
+    cap_mb = max_mb if max_mb is not None else s.surveillance_fetch_max_mb
+    limit = cap_mb * 1024 * 1024
     try:
         with urllib.request.build_opener(_NoRedirect).open(req, timeout=s.surveillance_fetch_timeout_s) as r:
             ctype = (r.headers.get("Content-Type") or "").lower()
@@ -96,16 +98,22 @@ def fetch_csv(s: Settings, group: str, indicator: str) -> bytes:
     except urllib.error.HTTPError as e:
         if 300 <= e.code < 400:
             raise SyncError(f"CNR answered HTTP {e.code} (a redirect). Redirects are not followed; check CNR_API_BASE_URL.")
-        hint = {401: "the key was refused", 403: "the key is not an admin key", 404: "the export route was not found (is the CNR API updated?)",
-                429: "rate limited", 502: "CNR could not read its data", 503: "surveillance storage is not set up on CNR"}.get(e.code, "unexpected answer")
+        hint = {400: "CNR refused the request (is the window too large?)", 401: "the key was refused", 403: "the key is not an admin key",
+                404: "the export route was not found (is the CNR API updated?)", 429: "rate limited", 502: "CNR could not read its data",
+                503: "surveillance storage is not set up on CNR (for training exports: run sql/050 there)"}.get(e.code, "unexpected answer")
         raise SyncError(f"CNR answered HTTP {e.code}: {hint}.")
     except Exception as e:  # DNS, TLS, timeout, refused, redirect
         raise SyncError(f"No usable answer from the CNR API ({type(e).__name__}).")
     if len(body) > limit:
-        raise SyncError(f"The export is larger than {s.surveillance_fetch_max_mb} MB.")
+        raise SyncError(f"The export is larger than {cap_mb} MB.")
     if "text/csv" not in ctype:
         raise SyncError("CNR did not return a CSV file.")
     return body
+
+
+def fetch_csv(s: Settings, group: str, indicator: str) -> bytes:
+    """The district-by-month counts export for one target."""
+    return get_csv(s, export_url(s, group, indicator))
 
 
 def _csv_rows(raw: bytes) -> int:
@@ -124,19 +132,22 @@ def _dataset(db, group: str, indicator: str) -> Dataset:
     return d
 
 
-def _store_version(db, d: Dataset, raw: bytes, approval_ref: str) -> DatasetVersion:
-    """Same path as a manual upload: parse, clean, analyse, apply the default plan, store only the de-identified table."""
-    df, fmt, warnings = ingest.parse_upload(raw, "cnr_surveillance_export.csv")
+def _store_version(db, d: Dataset, raw: bytes, approval_ref: str, *, actor: str = ACTOR, drop_duplicates: bool = True,
+                   filename: str = "cnr_surveillance_export.csv") -> DatasetVersion:
+    """Same path as a manual upload: parse, clean, analyse, apply the default plan, store only the de-identified table.
+    Aggregated counts have no meaningful duplicates (drop_duplicates stays on). Record-level training rows are EXPECTED to repeat
+    (coarse columns, same answers), so removing repeats would erase the frequencies a model learns from: callers pass False."""
+    df, fmt, warnings = ingest.parse_upload(raw, filename)
     df, notes = ingest.clean(df)
     reports = ingest.analyse(df)
     actions = {r.name: (r.suggested, None) for r in reports}
-    out, report, schema = ingest.apply_plan(df, reports, actions, True, notes)
+    out, report, schema = ingest.apply_plan(df, reports, actions, drop_duplicates, notes)
     report["warnings"] = warnings + report["warnings"]
     version = (db.scalar(select(func.max(DatasetVersion.version)).where(DatasetVersion.dataset_id == d.id)) or 0) + 1
     uri, stored = storage.save(d.id, version, out)
     row = DatasetVersion(dataset_id=d.id, version=version, sha256=ingest.sha256(stored), source_sha256=ingest.sha256(raw),
                          row_count=len(out), column_count=out.shape[1], file_format=fmt, storage_uri=uri, schema_json=schema,
-                         report_json=report, deidentified=True, approval_ref=approval_ref, created_by=ACTOR)
+                         report_json=report, deidentified=True, approval_ref=approval_ref, created_by=actor)
     db.add(row)
     db.commit()
     return row
