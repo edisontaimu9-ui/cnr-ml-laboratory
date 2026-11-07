@@ -96,3 +96,16 @@ def test_endpoints(client):
 
 def test_prelabel_needs_run_nlp(client):
     assert client.post("/v1/nlp/corpora/prelabel", files={"file": ("s.txt", b"x", "text/plain")}).status_code in (401, 403)
+
+
+def test_prelabel_endpoint_accepts_a_word_document(client):
+    import zipfile
+    b = io.BytesIO()
+    w = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+    with zipfile.ZipFile(b, "w") as z:
+        z.writestr("word/document.xml", f'<w:document {w}><w:body><w:p><w:r><w:t>The child ate rice and beans.</w:t></w:r></w:p></w:body></w:document>')
+    r = client.post("/v1/nlp/corpora/prelabel", files={"file": ("notes.docx", b.getvalue(), "application/octet-stream")},
+                    data={"lang": "en"}, headers=ADMIN)
+    assert r.status_code == 200 and "rice|FOOD" in r.text and r.headers["X-Prelabel-Documents"] == "1"
+    bad = client.post("/v1/nlp/corpora/prelabel", files={"file": ("scan.docx", b"not a zip", "application/octet-stream")}, headers=ADMIN)
+    assert bad.status_code == 422 and "not a valid .docx" in bad.text

@@ -118,7 +118,7 @@ def annotation_template():
 @router.post("/prelabel")
 async def prelabel(request: Request, file: UploadFile = File(...), lang: str | None = Form(None),
                    p: Principal = Depends(require("run:nlp")), db: Session = Depends(get_db)):
-    """Upload plain sentences (.txt, one per line, or a .csv with a text column) and get back an annotation CSV holding the engine's
+    """Upload plain sentences (.txt, one per line, or a .csv with a text column) or a document (.docx .pptx .odt .pdf .html .md) and get back an annotation CSV holding the engine's
     guesses for speakers to correct. Nothing is stored. A file with identifiers is refused whole."""
     if not _limiter.hit(str(p.key_id)):
         raise HTTPException(429, "Too many requests. Wait a moment.", headers={"Retry-After": str(_limiter.retry_after(str(p.key_id)))})

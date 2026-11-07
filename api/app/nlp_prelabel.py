@@ -1,7 +1,8 @@
 """Pre-label export and annotation template for the NLP laboratory.
 
 Speakers and clinicians correct guesses faster than they write annotations from nothing. `prelabel` reads plain sentences (a .txt file
-with one sentence per line, or a CSV with a `text` column), runs the rule-based engine on each, and returns a CSV in the
+with one sentence per line, or a CSV with a `text` column) or a document (.docx, .pptx, .odt, .pdf with selectable text, .html, .md,
+split into sentences by `nlp_extract`), runs the rule-based engine on each, and returns a CSV in the
 one-row-per-document corpus format (`text`, `lang`, `entities` as `surface|LABEL; surface|LABEL`). After correction the same file can
 be uploaded to /v1/nlp/corpora as it is: extra columns are ignored and never stored.
 
@@ -11,7 +12,7 @@ import csv
 import io
 from collections import Counter
 
-from . import nlp_corpus, nlp_formats, nlp_lab
+from . import nlp_corpus, nlp_extract, nlp_formats, nlp_lab
 
 MAX_LINES = 5000
 COLUMNS = ["doc_id", "lang", "text", "entities", "reviewed", "notes"]
@@ -22,9 +23,20 @@ class PrelabelError(ValueError):
 
 
 def read_sentences(raw: bytes, filename: str = "") -> list[tuple[str, str]]:
-    """Returns [(doc_id, text)] from a .txt (one sentence per line) or .csv (a `text` column, optional `doc_id`)."""
-    body = nlp_formats._decode(raw)
+    """Returns [(doc_id, text)] from a .txt (one sentence per line), a .csv (a `text` column, optional `doc_id`) or a document."""
     out: list[tuple[str, str]] = []
+    if nlp_extract.is_document(filename):
+        try:
+            sentences = nlp_extract.split_sentences(nlp_extract.extract_text(raw, filename))
+        except nlp_extract.ExtractError as e:
+            raise PrelabelError(str(e))
+        out = [(f"s-{n}", s) for n, s in enumerate(sentences, start=1)]
+        if not out:
+            raise PrelabelError("No sentences were found in the document.")
+        if len(out) > MAX_LINES:
+            raise PrelabelError(f"The document has {len(out)} sentences and the limit is {MAX_LINES}. Split it into parts.")
+        return out
+    body = nlp_formats._decode(raw)
     if filename.lower().endswith(".csv"):
         rows = list(csv.DictReader(io.StringIO(body, newline="")))
         if not rows or "text" not in {(k or "").strip().lower() for k in rows[0]}:

@@ -1318,7 +1318,7 @@
 
   function annotationTools() {
     const err = h("p", { class: "error", role: "alert" });
-    const file = h("input", { id: "pl-file", type: "file", accept: ".txt,.csv" });
+    const file = h("input", { id: "pl-file", type: "file", accept: ".txt,.csv,.docx,.pptx,.odt,.pdf,.html,.htm,.md" });
     const lang = h("select", { id: "pl-lang" }, h("option", { value: "" }, "Guess from the text"), Object.entries(LANGS).map(([k, v]) => h("option", { value: k }, v)));
     const tpl = h("button", { onclick: async () => {
       err.textContent = "";
@@ -1329,13 +1329,13 @@
       const pre = h("button", { class: "primary", onclick: async () => {
         err.textContent = "";
         const f = file.files[0];
-        if (!f) { err.textContent = "Choose a .txt file (one sentence per line) or a .csv file with a text column first."; return; }
+        if (!f) { err.textContent = "Choose a document (.docx, .pdf, .pptx, .odt, .html, .md), a .txt file (one sentence per line) or a .csv file with a text column first."; return; }
         const fd = new FormData(); fd.append("file", f); if (lang.value) fd.append("lang", lang.value);
         try { saveBlob(await api("/v1/nlp/corpora/prelabel", { method: "POST", body: fd, blob: true }), "cnr-nlp-prelabel.csv"); }
         catch (e) { err.textContent = e.message; }
       } }, "Download pre-labelled CSV");
-      out.push(h("p", null, "Pre-label: upload plain sentences and get back a CSV holding the rule engine's guesses for speakers to correct. The corrected file uploads as it is. Nothing is stored, and a file with identifiers is refused whole."),
-        h("div", { class: "form3" }, field("Sentences (.txt or .csv)", file, "pl-file"), field("Language", lang, "pl-lang")), pre);
+      out.push(h("p", null, "Pre-label: upload plain sentences or a document (Word, PDF with selectable text, PowerPoint, OpenDocument, HTML, Markdown) and get back a CSV holding the rule engine's guesses for speakers to correct. The corrected file uploads as it is. Nothing is stored, and a file with identifiers is refused whole."),
+        h("div", { class: "form3" }, field("Text file or document (.txt .csv .docx .pdf .pptx .odt .html .md)", file, "pl-file"), field("Language", lang, "pl-lang")), pre);
     }
     return h("div", { class: "card" }, h("h3", null, "Annotation tools"), ...out, err);
   }
