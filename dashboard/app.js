@@ -255,6 +255,7 @@
       const rows = o.terms.map((t) => [t.feature + (t.level != null ? " = " + t.level : " (per 1 SD)"), num3(t.coefficient),
         co.binary ? num3(t.odds_ratio) : "—", co.binary ? (t.odds_ratio_per_unit != null ? num3(t.odds_ratio_per_unit) : "—") : "—"]);
       out.push(table(co.binary ? ["Feature", "Coefficient (log-odds)", "Odds ratio", "Odds ratio per 1 unit"] : ["Feature", "Coefficient (log-odds)", "", ""], rows));
+      out.push(divBars(o.terms.map((t) => t.feature + (t.level != null ? " = " + t.level : "")), o.terms.map((t) => t.coefficient), "Red raises the modelled outcome, blue lowers it. Longer bar, stronger effect."));
       if (o.n_terms > o.terms.length) out.push(h("p", { class: "muted" }, "Showing the " + o.terms.length + " largest of " + o.n_terms + " terms."));
     });
     if (co.binary) out.push(h("p", { class: "muted" }, "Outcome modelled: " + co.outcomes[0].class + ". An odds ratio above 1 raises the odds of that outcome; below 1 lowers them."));
@@ -269,6 +270,7 @@
         [...(b ? [["Before recalibration", n3(b.brier), n3(b.log_loss), n3(b.ece)]] : []), [b ? "After " + c.method + " recalibration" : "Model's own probabilities", n3(a.brier), n3(a.log_loss), n3(a.ece)]]),
       h("p", { class: "muted" }, "Reliability: when the model is this confident in its top class, how often is it right? Close agreement means the probabilities can be read as frequencies."),
       table(["Confidence range", "Cases", "Mean confidence", "Observed accuracy"], (a.reliability || []).map((r) => [pct(r.range[0]) + "–" + pct(r.range[1]), r.n, pct(r.mean_confidence), pct(r.observed_accuracy)])),
+      (a.reliability || []).length ? barChart((a.reliability || []).map((r) => pct(r.range[0]) + "–" + pct(r.range[1])), [{ name: "Mean confidence", color: "#8a9ba2", values: a.reliability.map((r) => r.mean_confidence) }, { name: "Observed accuracy", color: "#0e5a73", values: a.reliability.map((r) => r.observed_accuracy) }], "Well calibrated when the two bars in each range are about the same length.") : null,
       h("p", { class: "muted" }, c.brier_note)];
     return out;
   }
@@ -297,7 +299,7 @@
           stat("Baseline macro F1", n3(b.macro_f1), b.strategy), stat("Balanced accuracy", pct(t.balanced_accuracy)), stat("Accuracy", pct(t.accuracy)), stat("ROC AUC", n3(t.roc_auc))),
         h("p", { class: "muted" }, "Baselines: always the most common class " + n3(b.majority_macro_f1) + ", guessing by class frequency " + n3(b.chance_macro_f1) + ". The model has to beat the higher one, with its 95% range clear of it."),
         h("p", { class: "muted" }, "Cross-validation on the training part (" + cv.folds + " folds): macro F1 " + n3(cv.macro_f1_mean) + " ± " + n3(cv.macro_f1_sd) + ", balanced accuracy " + n3(cv.balanced_accuracy_mean) + " ± " + n3(cv.balanced_accuracy_sd) + "."));
-      out.push(h("h2", null, "Per class"), table(["Class", "Precision", "Recall", "F1", "Test cases"], Object.entries(m.per_class || {}).map(([k, v]) => [k, v.precision, v.recall, v.f1, v.support])));
+      out.push(h("h2", null, "Per class"), perClassChart(m.per_class), table(["Class", "Precision", "Recall", "F1", "Test cases"], Object.entries(m.per_class || {}).map(([k, v]) => [k, v.precision, v.recall, v.f1, v.support])));
       const cm = m.confusion_matrix || { labels: [], matrix: [] };
       out.push(h("h2", null, "Confusion matrix"), h("p", { class: "muted" }, "Rows are the true class, columns the predicted class."),
         table(["True \\ Predicted", ...cm.labels], cm.matrix.map((row, i) => [cm.labels[i], ...row])));
@@ -1464,7 +1466,9 @@
         return [langName(l), trainL[l] || 0, testL[l] || 0, m.support ?? 0, n3(m.f1), n3(ru.f1), signed(v.difference),
           testL[l] ? verdictBadge(v.verdict) : h("span", { class: "badge bad" }, "not evaluated")];
       })),
+      nlpF1Chart(langs.map(langName), langs.map((l) => ((model.per_language || {})[l] || {}).f1), langs.map((l) => ((rules.per_language || {})[l] || {}).f1)),
       h("h3", null, "By label"),
+      nlpF1Chart(labels.map(labelName), labels.map((k) => ((model.per_label || {})[k] || {}).f1), labels.map((k) => ((rules.per_label || {})[k] || {}).f1)),
       table(["Label", "Training examples", "Test entities", "Precision", "Recall", "Model F1", "Rules F1", "Difference", "Verdict"], labels.map((k) => {
         const m = (model.per_label || {})[k] || {}, ru = (rules.per_label || {})[k] || {}, v = (cmp.per_label || {})[k] || {};
         return [labelName(k), (split.train_by_label || {})[k] || 0, m.support ?? 0, n3(m.precision), n3(m.recall), n3(m.f1), n3(ru.f1), signed(v.difference), verdictBadge(v.verdict)];
@@ -1476,6 +1480,7 @@
     out.push(h("details", { class: "card" }, h("summary", null, "Language by label: model F1 / rules F1 (test entities)"),
       table(["Language", ...labels.map(labelName)], langs.map((l) => [langName(l), ...labels.map((k) => cell(l, k))]))));
     const loss = res.loss_by_epoch || [];
+    if (loss.length > 1) out.push(lineChart(loss, "Training loss per pass. It should fall and level off."));
     if (loss.length) out.push(h("p", { class: "muted" }, "Training loss over " + loss.length + " passes: " + loss[0] + " at the start, " + loss[loss.length - 1] + " at the end."));
     return out;
   }
@@ -2292,6 +2297,32 @@
       h("div", { class: "inline" }, h("div", null, h("label", { for: "nq" }, "Search"), q), h("div", null, h("label", { for: "nfk" }, "Type"), kind), h("div", null, h("label", { for: "nfs" }, "About"), subj)),
       h("p", null, h("label", null, arch, " Show archived")), list];
   }
+
+  const svgEl = (tag, attrs) => { const e = document.createElementNS("http://www.w3.org/2000/svg", tag); for (const [a, v] of Object.entries(attrs || {})) e.setAttribute(a, v); return e; };
+  function divBars(labels, values, caption) {
+    const W = 560, pl = 190, pr = 50, rowH = 20, H = 12 + labels.length * rowH, mx = Math.max(0.0001, ...values.map((v) => Math.abs(v || 0))), mid = pl + (W - pl - pr) / 2, half = (W - pl - pr) / 2;
+    const svg = svgEl("svg", { viewBox: "0 0 " + W + " " + H, role: "img", width: "100%", "aria-label": caption });
+    svg.appendChild(svgEl("line", { x1: mid, x2: mid, y1: 4, y2: H - 4, stroke: "#9fb0b6" }));
+    labels.forEach((lab, i) => {
+      const y = 8 + i * rowH, v = values[i] || 0, w = (Math.abs(v) / mx) * half, t = svgEl("text", { x: pl - 8, y: y + 11, "text-anchor": "end", "font-size": 10.5, fill: "#34454c" });
+      t.textContent = lab.length > 30 ? lab.slice(0, 29) + "…" : lab; svg.appendChild(t);
+      svg.appendChild(svgEl("rect", { x: v >= 0 ? mid : mid - w, y, width: Math.max(1, w).toFixed(1), height: 13, rx: 2, fill: v >= 0 ? "#c0392b" : "#0e5a73" }));
+      const n = svgEl("text", { x: v >= 0 ? mid + w + 4 : mid - w - 4, y: y + 11, "text-anchor": v >= 0 ? "start" : "end", "font-size": 10, fill: "#34454c" }); n.textContent = v.toFixed(2); svg.appendChild(n);
+    });
+    return h("div", null, svg, h("p", { class: "muted" }, caption));
+  }
+  function lineChart(vals, caption) {
+    if (vals.length < 2) return null;
+    const W = 560, H = 200, pl = 46, pr = 14, pt = 12, pb = 24, y1 = Math.max(...vals), y0 = Math.min(...vals), sx = (i) => pl + (i / (vals.length - 1)) * (W - pl - pr), sy = (v) => pt + (1 - (v - y0) / (y1 - y0 || 1)) * (H - pt - pb);
+    const svg = svgEl("svg", { viewBox: "0 0 " + W + " " + H, role: "img", width: "100%", "aria-label": caption });
+    [y0, (y0 + y1) / 2, y1].forEach((v) => { const y = sy(v).toFixed(1); svg.appendChild(svgEl("line", { x1: pl, x2: W - pr, y1: y, y2: y, stroke: "#e3eaec" })); const t = svgEl("text", { x: pl - 6, y: Number(y) + 4, "text-anchor": "end", "font-size": 10.5, fill: "#5b6b72" }); t.textContent = v.toFixed(3); svg.appendChild(t); });
+    svg.appendChild(svgEl("path", { d: vals.map((v, i) => (i ? "L" : "M") + sx(i).toFixed(1) + " " + sy(v).toFixed(1)).join(" "), fill: "none", stroke: "#0e5a73", "stroke-width": 2 }));
+    const a = svgEl("text", { x: pl, y: H - 6, "font-size": 10.5, fill: "#5b6b72" }); a.textContent = "pass 1"; svg.appendChild(a);
+    const z = svgEl("text", { x: W - pr, y: H - 6, "text-anchor": "end", "font-size": 10.5, fill: "#5b6b72" }); z.textContent = "pass " + vals.length; svg.appendChild(z);
+    return h("div", null, svg, h("p", { class: "muted" }, caption));
+  }
+  const nlpF1Chart = (labels, model, rules) => labels.length ? barChart(labels, [{ name: "Model F1", color: "#0e5a73", values: model }, { name: "Rules F1", color: "#8a9ba2", values: rules }], "Higher is better. Compare the model with the rules baseline on the test documents.") : null;
+  const perClassChart = (pc) => { const k = Object.keys(pc || {}); return k.length ? barChart(k, [{ name: "Precision", color: "#8a9ba2", values: k.map((x) => pc[x].precision) }, { name: "Recall", color: "#c0392b", values: k.map((x) => pc[x].recall) }, { name: "F1", color: "#0e5a73", values: k.map((x) => pc[x].f1) }], "Per-class precision, recall and F1 on the hold-out test.") : null; };
 
   function barChart(labels, series, caption) {
     const NS = "http://www.w3.org/2000/svg", W = 560, rowH = 20 + series.length * 14, pl = 150, pr = 44, H = 12 + labels.length * rowH;
