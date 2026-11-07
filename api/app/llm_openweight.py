@@ -63,8 +63,14 @@ def base_url(s: Settings) -> str:
 
 
 def key_problem(s: Settings) -> str | None:
+    """For summarisation: needs SUMMARY_ENABLED as well."""
     if not s.summary_enabled:
         return "Summarisation is off (SUMMARY_ENABLED=false)."
+    return problem(s)
+
+
+def problem(s: Settings) -> str | None:
+    """None when the model server can be called (used by comparison runs, which do not need SUMMARY_ENABLED)."""
     if not s.openweight_enabled:
         return "Open-weight models are off (OPENWEIGHT_ENABLED=false)."
     u = urllib.parse.urlsplit(base_url(s))
@@ -86,7 +92,7 @@ def public_status(s: Settings) -> dict:
     u = urllib.parse.urlsplit(base_url(s))
     bad = key_problem(s)
     return {"enabled": s.openweight_enabled, "ready": bad is None, "problem": bad, "provider": "openweight", "host": u.hostname,
-            "key_configured": bool(_key(s)), "default_model": default_model(s), "models": models(s),
+            "server_ready": problem(s) is None, "key_configured": bool(_key(s)), "default_model": default_model(s), "models": models(s),
             "catalog": [{"id": k, **v, "served_as": served_name(s, k), "allowed": k in models(s)} for k, v in CATALOG.items()]}
 
 
@@ -98,10 +104,36 @@ def chat_json(s: Settings, model: str, messages: list[dict], *, max_tokens: int,
     bad = key_problem(s)
     if bad:
         raise OpenWeightError(bad)
+    return _chat(s, model, messages, max_tokens=max_tokens, correlation_id=correlation_id, json_mode=True)
+
+
+def chat_text(s: Settings, model: str, messages: list[dict], *, max_tokens: int, correlation_id: str | None = None) -> dict:
+    """One plain-text chat completion (used by comparison runs). Same return shape as chat_json."""
+    return _chat(s, model, messages, max_tokens=max_tokens, correlation_id=correlation_id, json_mode=False)
+
+
+MAX_PASSAGE_CHARS = 1200
+RAG_RULES = ("\nAnswer the QUESTION using only the numbered SOURCES. Cite every statement as [n]. If the sources do not contain the answer, say that "
+             "they do not. Keep numbers and units exactly as in the sources.")
+
+
+def build_rag_messages(question: str, passages: list[dict]) -> list[dict]:
+    """The one prompt format for answering from sources. Comparison runs and the training-data export both use it, so a fine-tuned model
+    is trained on exactly what it will be asked. passages: [{"text": ...}] (numbered in order)."""
+    from . import llm_policy
+    src = "\n".join(f"[{i}] {p['text'][:MAX_PASSAGE_CHARS]}" for i, p in enumerate(passages, 1)) or "(no sources)"
+    return [{"role": "system", "content": llm_policy.SYSTEM_RULES + RAG_RULES}, {"role": "user", "content": f"SOURCES:\n{src}\n\nQUESTION: {question}"}]
+
+
+def _chat(s: Settings, model: str, messages: list[dict], *, max_tokens: int, correlation_id: str | None, json_mode: bool) -> dict:
+    bad = problem(s)
+    if bad:
+        raise OpenWeightError(bad)
     if model not in models(s):
         raise OpenWeightError("That model is not in the allow-list.")
-    payload = {"model": served_name(s, model), "messages": messages, "temperature": 0, "max_tokens": max_tokens,
-               "response_format": {"type": "json_object"}}
+    payload = {"model": served_name(s, model), "messages": messages, "temperature": 0, "max_tokens": max_tokens}
+    if json_mode:
+        payload["response_format"] = {"type": "json_object"}
     if s.openweight_disable_thinking:
         payload["chat_template_kwargs"] = {"enable_thinking": False}   # Qwen3.5 and Gemma 4 both honour this on vLLM
     headers = {"Content-Type": "application/json", "Accept": "application/json", "User-Agent": "cnr-ml-lab/" + s.service_version}

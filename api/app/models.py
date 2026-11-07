@@ -342,3 +342,21 @@ class LlmEvalRating(Base):
     comment: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+# ---------------------------------------------------------------- Fine-tuning data (reviewed instruction examples, exported as JSONL)
+class LlmTrainExample(Base):
+    """One reviewed question-and-answer example for LoRA fine-tuning. Knowledge only, never patient text. Approved by a different key than the author."""
+    __tablename__ = "mlab_llm_train_examples"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    question: Mapped[str] = mapped_column(Text)
+    passages_json: Mapped[list] = mapped_column(JSON, default=list)      # [{"text": ...}] the sources the answer is written from (may be empty)
+    answer: Mapped[str] = mapped_column(Text)
+    split: Mapped[str] = mapped_column(String(8), default="train")       # train | val
+    status: Mapped[str] = mapped_column(String(10), default="draft")     # draft | approved | rejected
+    created_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    created_by_key_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reviewed_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    reviewed_by_key_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

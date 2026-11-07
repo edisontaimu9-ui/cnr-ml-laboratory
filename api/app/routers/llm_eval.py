@@ -20,7 +20,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from .. import llm_audit, llm_eval, llm_gateway, llm_policy, nlp_lab
+from .. import llm_audit, llm_eval, llm_gateway, llm_openweight, llm_policy, nlp_lab
 from ..config import get_settings
 from ..db import SessionLocal, get_db
 from ..models import LlmEvalQuestion, LlmEvalRating, LlmEvalResult, LlmEvalRun, LlmEvalSet, utcnow
@@ -54,6 +54,7 @@ class QuestionsCreate(BaseModel):
 class RunCreate(BaseModel):
     split: Literal["dev", "heldout", "all"] = "dev"
     top_k: int = Field(default=5, ge=1, le=10)
+    model: str | None = Field(default=None, max_length=60)    # an open-weight model id: answers are written by it from the same retrieved sources
 
 
 class RatingBody(BaseModel):
@@ -232,14 +233,23 @@ def start_run(set_id: int, body: RunCreate, request: Request, background: Backgr
             raise HTTPException(409, "Another evaluation run is still running. Wait for it to finish or stop it.")
     dicts = [_q_dict(q) for q in qs]
     host = llm_gateway.public_status(s).get("chakudya_host")
+    if body.model:
+        if body.model not in llm_openweight.models(s):
+            raise HTTPException(422, "That model is not in the allow-list. Choose one of: " + ", ".join(llm_openweight.models(s)) + ".")
+        bad = llm_openweight.problem(s)
+        if bad:
+            raise HTTPException(503, bad)
     cfg = {"split": body.split, "top_k": body.top_k, "question_ids": [q["id"] for q in dicts], "identifier_policy": "reject", "policy": llm_policy.POLICY_VERSION,
            "identifier_detector": nlp_lab.ENGINE_VERSION, "method": llm_eval.METHOD["version"], "chakudya_host": host,
-           "service_version": s.service_version, "language_model": "Chakudya's own pipeline (none added by this laboratory)"}
+           "service_version": s.service_version,
+           "language_model": "Chakudya's own pipeline (none added by this laboratory)" if not body.model else "open-weight model " + body.model + " (answers written from Chakudya's retrieved sources)",
+           "generator": body.model or "chakudya", "prompt": "cnr-rag-prompt/1" if body.model else None}
     run = LlmEvalRun(set_id=set_id, set_sha256=llm_eval.set_sha256(dicts), config_json=cfg, status="queued", question_count=len(dicts),
                      created_by=p.name, created_by_key_id=p.key_id)
     db.add(run)
     db.commit()
-    llm_audit.record(db, "llm.eval.run_started", principal=p, request=request, resource_id=run.id, questions=len(dicts), split=body.split, top_k=body.top_k)
+    llm_audit.record(db, "llm.eval.run_started", principal=p, request=request, resource_id=run.id, questions=len(dicts), split=body.split, top_k=body.top_k,
+                     **({"model": body.model, "provider": "openweight"} if body.model else {}))
     background.add_task(run_eval, run.id)
     return _run_out(db, run)
 
@@ -255,6 +265,15 @@ def run_eval(run_id: int) -> None:
         run.status = "running"
         db.commit()
         cfg, status, reason, done, errors = run.config_json, "completed", None, 0, 0
+        gen = None
+        if cfg.get("generator") not in (None, "chakudya"):
+            mdl = cfg["generator"]
+
+            def gen(question, passages):
+                try:
+                    return llm_openweight.chat_text(s, mdl, llm_openweight.build_rag_messages(question, passages), max_tokens=600)["content"]
+                except llm_openweight.OpenWeightError:
+                    raise llm_eval.GeneratorError()
         try:
             for qid in cfg["question_ids"]:
                 db.refresh(run)
@@ -263,7 +282,7 @@ def run_eval(run_id: int) -> None:
                     break
                 row = db.get(LlmEvalQuestion, qid)
                 try:
-                    metrics, answer = llm_eval.evaluate_question(s, _q_dict(row), top_k=cfg["top_k"], key_id=run.created_by_key_id, sleep=_sleep)
+                    metrics, answer = llm_eval.evaluate_question(s, _q_dict(row), top_k=cfg["top_k"], key_id=run.created_by_key_id, sleep=_sleep, generator=gen)
                 except llm_eval.RunStop as e:
                     status, reason = "stopped", e.reason
                     break
@@ -309,6 +328,25 @@ def stop_run(run_id: int, request: Request, p: Principal = Depends(require("use:
     db.commit()
     llm_audit.record(db, "llm.eval.run_stop_requested", principal=p, request=request, resource_id=run_id)
     return _run_out(db, r)
+
+
+# ---------------------------------------------------------------- compare two runs
+@router.get("/compare", dependencies=[Depends(require("read:llm"))])
+def compare_runs(a: int, b: int, db: Session = Depends(get_db)):
+    """Run A (for example the base model) against run B (for example a fine-tuned adapter). Only runs on the same question fingerprint can be compared."""
+    ra, rb = _run(db, a), _run(db, b)
+    if a == b:
+        raise HTTPException(422, "Choose two different runs.")
+    if ra.set_sha256 != rb.set_sha256:
+        raise HTTPException(409, "These runs used different questions (the fingerprints differ), so they cannot be compared. Run both on the same set and split.")
+    out = []
+    for r in (ra, rb):
+        rows, ratings = _rows(db, r.id)
+        out.append({"label": f"#{r.id} " + ((r.config_json or {}).get("generator") or "chakudya"), "rows": rows, "ratings": ratings, "status": r.status, "total": r.question_count})
+    res = llm_eval.compare(out[0], out[1])
+    res["a"].update(run_id=a, generator=(ra.config_json or {}).get("generator") or "chakudya")
+    res["b"].update(run_id=b, generator=(rb.config_json or {}).get("generator") or "chakudya")
+    return res
 
 
 # ---------------------------------------------------------------- results and reviewer ratings

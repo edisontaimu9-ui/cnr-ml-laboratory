@@ -248,6 +248,8 @@ It exists to turn nutrition data into usable intelligence for Malawi: research, 
 ## Open-weight models and LoRA fine-tuning (external GPU)
 - **Models:** Qwen3.5 9B / 27B (first choice) and Gemma 4 E4B / 12B (second choice), served by an OpenAI-compatible server you run (vLLM etc.). Off until `OPENWEIGHT_ENABLED=true`; `POST /v1/llm/summarise` accepts `"provider": "openweight"` and a `model` from the allow-list. Address and key are server-side only. See [training/README.md](training/README.md).
 - **Fine-tuning:** `training/train_lora.py` trains a LoRA/QLoRA adapter on an external GPU (Colab, Kaggle, RunPod) from reviewed, de-identified JSONL, and writes a report with the data hash. The adapter is served next to the base model with vLLM and added through `OPENWEIGHT_SERVED`. The API server never trains.
+- **Dashboard:** the Summarise page chooses Groq or open-weight and the model; **RAG evaluation** can run a question set with an open-weight model answering from Chakudya's retrieved sources (`POST /v1/llm/eval/sets/{id}/runs` with `model`) and **Compare** two runs on the same questions (`GET /v1/llm/eval/compare?a=&b=`: paired difference with a 95% interval, safety guards, readiness).
+- **Training data:** page **Training data** (`/v1/llm/train/examples`): reviewed, identifier-screened, cited examples; approved by a different person; questions in a held-out gold set are refused; `GET /v1/llm/train/export?split=train|val` downloads JSONL in the exact prompt format used at run time.
 - Compare an adapter with the base model on held-out questions before using it. All output screens, fact validation and clinician review still apply.
 
 ## Roles

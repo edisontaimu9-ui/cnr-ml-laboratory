@@ -28,7 +28,7 @@ ALLOWED = {
     # phase 4 (document summarisation): counts and fixed codes about extraction, validation and review, never note or summary text
     "facts": "int", "sentences": "int", "sentences_valid": "int", "sentences_rejected": "int", "numbers_checked": "int",
     "reject_reasons": "counts", "model_used": "bool", "model": "code", "provider": "code", "prompt": "code", "tokens_in": "int", "tokens_out": "int",
-    "review": "code", "attest_facts": "bool", "attest_numbers": "bool", "edited": "bool", "age_s": "int", "flagged_sentences": "int",
+    "examples": "int", "review": "code", "attest_facts": "bool", "attest_numbers": "bool", "edited": "bool", "age_s": "int", "flagged_sentences": "int",
 }
 
 

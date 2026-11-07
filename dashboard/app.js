@@ -75,6 +75,7 @@
     { id: "ask", label: "Ask CNR", perm: "use:llm", render: askPage },
     { id: "eval", label: "RAG evaluation", perm: "read:llm", render: evalPage },
     { id: "summarise", label: "Summarise note", perm: "summarise:llm", render: summarisePage },
+    { id: "train", label: "Training data", perm: "read:llm", render: trainPage },
     { id: "predict", label: "Predict", perm: "predict:models", render: predictPage },
     { id: "registry", label: "Registry", perm: "read:models", render: registry },
     { id: "datasets", label: "Datasets", perm: "read:datasets", render: datasets },
@@ -1841,15 +1842,21 @@
     const st = await api("/v1/llm/summarise/status"), sm = st.summarisation;
     const note = h("textarea", { id: "sum-note", rows: "9", maxlength: String(st.limits.max_note_chars), spellcheck: "false", placeholder: "Paste a de-identified clinical note. Remove names, phone numbers, record numbers and addresses first." });
     const ids = h("select", { id: "sum-ids", "aria-label": "Identifiable text" }, h("option", { value: "reject" }, "Refuse notes that have identifiers"), h("option", { value: "mask" }, "Mask identifiers and continue"));
-    const useModel = h("input", { type: "checkbox", id: "sum-model", checked: sm.ready, disabled: !sm.ready });
-    const model = h("select", { id: "sum-model-name", "aria-label": "Model", disabled: !sm.ready }, (sm.models || []).map((m) => h("option", { value: m, selected: m === sm.default_model }, m)));
+    const useModel = h("input", { type: "checkbox", id: "sum-model", checked: sm.ready || (st.openweight || {}).ready, disabled: !(sm.ready || (st.openweight || {}).ready) });
+    const ow = st.openweight || { ready: false, models: [] };
+    const anyReady = sm.ready || ow.ready;
+    const provider = h("select", { id: "sum-provider", "aria-label": "Model provider", onchange: () => fillModels() },
+      h("option", { value: "groq", disabled: !sm.ready }, "Groq" + (sm.ready ? "" : " (not configured)")), h("option", { value: "openweight", disabled: !ow.ready, selected: !sm.ready && ow.ready }, "Open-weight (Qwen / Gemma)" + (ow.ready ? "" : " (not configured)")));
+    const model = h("select", { id: "sum-model-name", "aria-label": "Model", disabled: !anyReady });
+    const fillModels = () => { const src = provider.value === "openweight" ? ow : sm; model.replaceChildren(...(src.models || []).map((m) => h("option", { value: m, selected: m === src.default_model }, m))); };
+    fillModels();
     const err = h("p", { class: "error", role: "alert" }), out = h("div", { "aria-live": "polite" });
     const run = h("button", { class: "primary", type: "button", onclick: async () => {
       const text = note.value.trim();
       if (!text) { err.textContent = "Paste a note first."; return; }
       err.textContent = ""; run.disabled = true; out.replaceChildren(loader("Extracting facts" + (useModel.checked ? " and writing a summary…" : "…")));
       try {
-        const d = await api("/v1/llm/summarise", { method: "POST", body: JSON.stringify({ note: text, identifiers: ids.value, use_model: useModel.checked && sm.ready, model: model.value || null }) });
+        const d = await api("/v1/llm/summarise", { method: "POST", body: JSON.stringify({ note: text, identifiers: ids.value, use_model: useModel.checked && anyReady, model: model.value || null, provider: provider.value }) });
         const state = { reviewed: null };
         out.replaceChildren(
           h("h2", null, "Result"), (d.warnings || []).length ? h("ul", { class: "plain warn" }, d.warnings.map((w) => h("li", null, w))) : null,
@@ -1863,11 +1870,49 @@
     return [h("h1", null, "Summarise note"),
       h("p", null, "Turn a de-identified clinical note into structured facts and, optionally, a short summary. The language model sees only the extracted facts, never the note, and every number and term in its sentences is checked against the note."),
       h("div", { class: "notice" }, st.notice),
-      sm.ready ? null : h("div", { class: "notice" }, "The model summary is unavailable: " + (sm.problem || "not configured") + " Fact extraction still works."),
-      h("div", { class: "ask-controls" }, h("div", null, h("label", { for: "sum-model" }, h("span", null, "Write a summary with the model "), useModel), model), h("div", null, h("label", { for: "sum-ids" }, "Identifiable text"), ids)),
+      anyReady ? null : h("div", { class: "notice" }, "The model summary is unavailable: " + (sm.problem || "not configured") + " Fact extraction still works."),
+      h("div", { class: "ask-controls" }, h("div", null, h("label", { for: "sum-model" }, h("span", null, "Write a summary with the model "), useModel), provider, model), h("div", null, h("label", { for: "sum-ids" }, "Identifiable text"), ids)),
       h("label", { for: "sum-note" }, "De-identified note"), note, err,
       h("div", { class: "ask-actions" }, run, clear, h("span", { class: "muted" }, "Up to " + st.limits.max_note_chars + " characters")),
       h("p", { class: "muted" }, "Nothing is stored: the note, the facts and the summary stay in this page and disappear when you leave it or clear it."), out];
+  }
+
+  // ---- Training data (fine-tuning): reviewed knowledge examples -> approved by a different person -> JSONL for LoRA training on an external GPU.
+  // Never patient text. All text is inserted as text. Nothing is kept in the browser.
+  async function trainPage() {
+    const d = await api("/v1/llm/train/examples"), c = d.counts || {}, ap = d.approved_by_split || {};
+    const q = h("input", { id: "tr-q", type: "text", maxlength: "1000", placeholder: "A knowledge question (no patient information)" });
+    const pa = h("textarea", { id: "tr-p", rows: "5", placeholder: "Source passages the answer is written from. Separate passages with a line containing only ---. Leave empty for none." });
+    const an = h("textarea", { id: "tr-a", rows: "4", placeholder: "The answer. Cite the passages as [1], [2]. Knowledge only: no diagnosis or prescription about a person." });
+    const sp = h("select", { id: "tr-s", "aria-label": "Split" }, h("option", { value: "train" }, "Training"), h("option", { value: "val" }, "Validation"));
+    const err = h("p", { class: "error", role: "alert" });
+    const form = can("write:llm_gold") ? [h("h2", null, "Add an example"), h("label", { for: "tr-q" }, "Question"), q, h("label", { for: "tr-p" }, "Source passages"), pa, h("label", { for: "tr-a" }, "Answer"), an,
+      h("div", { class: "ask-controls" }, h("div", null, h("label", { for: "tr-s" }, "Use for"), sp)), err,
+      h("button", { class: "primary", onclick: async () => {
+        err.textContent = "";
+        try {
+          await api("/v1/llm/train/examples", { method: "POST", body: JSON.stringify({ examples: [{ question: q.value, passages: pa.value.split(/\n-{3,}\n/).map((x) => x.trim()).filter(Boolean), answer: an.value, split: sp.value }] }) });
+          show("train");
+        } catch (e) { err.textContent = e.message; }
+      } }, "Add example")] : [];
+    const shaOut = h("p", { class: "muted", "aria-live": "polite" });
+    const exp = (split) => h("button", { onclick: async () => {
+      try {
+        const blob = await api("/v1/llm/train/export?split=" + split, { blob: true });
+        const sha = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", await blob.arrayBuffer()))).map((x) => x.toString(16).padStart(2, "0")).join("");
+        saveBlob(blob, "cnr-" + split + ".jsonl"); shaOut.textContent = "Saved cnr-" + split + ".jsonl · SHA-256 " + sha;
+      } catch (e) { shaOut.textContent = e.message; }
+    } }, "Download " + (split === "train" ? "training" : "validation") + " JSONL (" + (ap[split] || 0) + ")");
+    const review = (x, decision) => h("button", { class: "link", onclick: async () => { try { await api("/v1/llm/train/examples/" + x.id + "/review", { method: "POST", body: JSON.stringify({ decision }) }); show("train"); } catch (e) { alert(e.message); } } }, decision === "approved" ? "Approve" : "Reject");
+    const del = (x) => h("button", { class: "link", onclick: async () => { if (!confirm("Delete this draft?")) return; try { await api("/v1/llm/train/examples/" + x.id, { method: "DELETE" }); show("train"); } catch (e) { alert(e.message); } } }, "Delete");
+    const rows = (d.examples || []).map((x) => [x.question, x.answer.slice(0, 120) + (x.answer.length > 120 ? "…" : ""), x.split, h("span", { class: "badge " + (x.status === "approved" ? "" : x.status === "rejected" ? "bad" : "watch") }, x.status), x.created_by || "—",
+      h("span", null, x.status === "draft" && can("rate:llm") ? [review(x, "approved"), " ", review(x, "rejected"), " "] : null, x.status !== "approved" && can("write:llm_gold") ? del(x) : null)]);
+    return [h("h1", null, "Training data"),
+      h("p", null, "Reviewed knowledge examples for fine-tuning an open-weight model with LoRA on an external GPU. An example is exported only after a different person approves it. Questions that are in a held-out evaluation set are refused, so test questions cannot leak into training."),
+      h("div", { class: "stats" }, nlpStat("Drafts", String(c.draft || 0)), nlpStat("Approved", String(c.approved || 0)), nlpStat("Rejected", String(c.rejected || 0))),
+      can("export:llm_train") ? h("div", { class: "ask-actions" }, exp("train"), exp("val")) : null, shaOut,
+      h("p", { class: "muted" }, "Train with training/train_lora.py (see training/README.md). The export uses the same prompt format the lab uses when it asks a model a question."),
+      rows.length ? table(["Question", "Answer", "Use", "Status", "Author", ""], rows) : empty("No examples yet", can("write:llm_gold") ? "Add the first example below." : "A data scientist can add examples."), form];
   }
 
   // ---- RAG evaluation laboratory (LLM phase 3). Routes: eval (question sets), eval/set-<id>, eval/runs, eval/run-<id>, eval/result-<id>.
@@ -1974,12 +2019,15 @@
       const split = h("select", { id: "ev-run-split" }, h("option", { value: "dev" }, "Development questions"), h("option", { value: "heldout" }, "Held-out questions"), h("option", { value: "all" }, "All questions"));
       const topk = h("select", { id: "ev-topk" }, [3, 5, 8, 10].map((n) => h("option", { value: String(n), selected: n === 5 }, "Top " + n + " sources")));
       const err = h("p", { class: "error", role: "alert" });
+      const owst = await api("/v1/llm/summarise/status").then((x) => x.openweight || {}).catch(() => ({}));
+      const gen = h("select", { id: "ev-gen" }, h("option", { value: "" }, "Chakudya's own pipeline"),
+        owst.server_ready ? (owst.models || []).map((m) => h("option", { value: m }, "Open-weight: " + m)) : null);
       out.push(h("h2", null, "Run an evaluation"),
         h("div", { class: "notice" }, "Each question is checked like a live question, then sent to Chakudya twice (sources, then answer). Every call counts toward your rate limit, so a large set takes several minutes. Held-out questions are for the final check only; do not tune against them."),
-        h("div", { class: "ask-controls" }, h("div", null, h("label", { for: "ev-run-split" }, "Questions"), split), h("div", null, h("label", { for: "ev-topk" }, "Retrieval depth"), topk)), err,
+        h("div", { class: "ask-controls" }, h("div", null, h("label", { for: "ev-run-split" }, "Questions"), split), h("div", null, h("label", { for: "ev-topk" }, "Retrieval depth"), topk), h("div", null, h("label", { for: "ev-gen" }, "Answers written by"), gen)), err,
         h("button", { class: "primary", onclick: async () => {
           err.textContent = "";
-          try { const r = await api("/v1/llm/eval/sets/" + id + "/runs", { method: "POST", body: JSON.stringify({ split: split.value, top_k: Number(topk.value) }) }); location.hash = "eval/run-" + r.id; }
+          try { const r = await api("/v1/llm/eval/sets/" + id + "/runs", { method: "POST", body: JSON.stringify({ split: split.value, top_k: Number(topk.value), model: gen.value || null }) }); location.hash = "eval/run-" + r.id; }
           catch (e) { err.textContent = e.message; }
         } }, "Start run"));
     }
@@ -1991,11 +2039,42 @@
     if (!rows.length) return empty("No runs yet", "Start a run from a question set.");
     return table(["Run", "Set", "Status", "Questions", "Config", "Started by", "Started", ""], rows.map((r) => ["#" + r.id, r.set_name || "—",
       h("span", { class: "badge " + (r.status === "completed" ? "" : r.status === "failed" ? "bad" : "watch") }, r.status + (r.stop_reason ? " · " + r.stop_reason.replace(/_/g, " ") : "")),
-      r.completed + " / " + r.question_count, (r.config.split || "—") + ", top " + (r.config.top_k || "—"), r.created_by || "—", fmt(r.created_at),
+      r.completed + " / " + r.question_count, (r.config.split || "—") + ", top " + (r.config.top_k || "—") + " · " + (r.config.generator || "chakudya"), r.created_by || "—", fmt(r.created_at),
       h("button", { class: "link", onclick: () => { location.hash = "eval/run-" + r.id; } }, "Open")]));
   }
 
-  async function evalRuns() { return [h("p", null, "Every run is kept with its configuration and the fingerprint of the questions it used, so two runs are comparable only when the fingerprints match."), evalRunTable(await api("/v1/llm/eval/runs"))]; }
+  async function evalRuns() {
+    const rows = await api("/v1/llm/eval/runs"), done = rows.filter((r) => r.status === "completed");
+    const opt = (r) => h("option", { value: String(r.id) }, "#" + r.id + " · " + (r.config.generator || "chakudya") + " · " + r.set_name + " · " + (r.config.split || ""));
+    const a = h("select", { id: "cmp-a", "aria-label": "Run A (baseline)" }, done.map(opt)), b = h("select", { id: "cmp-b", "aria-label": "Run B (candidate)" }, done.map(opt));
+    if (done.length > 1) b.selectedIndex = 1;
+    const out = h("div", { "aria-live": "polite" }), err = h("p", { class: "error", role: "alert" });
+    const cmp = done.length < 2 ? h("p", { class: "muted" }, "Complete two runs on the same questions (for example the base model, then a fine-tuned one) to compare them.") : [
+      h("h2", null, "Compare two runs"),
+      h("p", { class: "muted" }, "A is the baseline (for example the base model), B the candidate (for example a fine-tuned adapter). Both runs must have used the same questions."),
+      h("div", { class: "ask-controls" }, h("div", null, h("label", { for: "cmp-a" }, "A · baseline"), a), h("div", null, h("label", { for: "cmp-b" }, "B · candidate"), b)), err,
+      h("button", { class: "primary", onclick: async () => {
+        err.textContent = ""; out.replaceChildren();
+        try {
+          const c = await api("/v1/llm/eval/compare?a=" + a.value + "&b=" + b.value), sa = c.a.summary, sb = c.b.summary;
+          const verdict = { a_better: "A is better", b_better: "B is better", no_clear_difference: "No clear difference" }[c.verdict];
+          out.replaceChildren(
+            h("div", { class: "notice " + (c.b_may_replace_a ? "ok" : "") }, h("b", null, verdict + ". "), "Mean difference (B minus A) " + (c.mean_difference_b_minus_a ?? "—") + (c.ci95 ? ", 95% interval " + c.ci95[0] + " to " + c.ci95[1] : "") + " over " + c.paired_questions + " paired questions. " +
+              (c.b_may_replace_a ? "B passes every check here." : "Do not replace A with B on this result.")),
+            c.guards.length ? h("ul", { class: "plain warn" }, c.guards.map((x) => h("li", null, x))) : null,
+            c.readiness_both_sufficient ? null : h("p", { class: "muted" }, "Not enough evidence in at least one run (see each run's readiness), so no quality claim is possible."),
+            table(["Measure", "A · " + c.a.label, "B · " + c.b.label], [
+              ["Fact coverage", pct1(sa.groundedness.fact_coverage.mean), pct1(sb.groundedness.fact_coverage.mean)],
+              ["Answers grounded", evalRate(sa.groundedness.grounded_rate), evalRate(sb.groundedness.grounded_rate)],
+              ["Numbers supported by sources", evalRate(sa.groundedness.numeric_support_rate), evalRate(sb.groundedness.numeric_support_rate)],
+              ["Refusals as expected", evalRate(sa.refusals.recall), evalRate(sb.refusals.recall)],
+              ["Over-refusal", evalRate(sa.refusals.over_refusal_rate), evalRate(sb.refusals.over_refusal_rate)],
+              ["Errors", String(sa.errors), String(sb.errors)]]),
+            h("p", { class: "muted" }, c.note));
+        } catch (e) { err.textContent = e.message; }
+      } }, "Compare")];
+    return [h("p", null, "Every run is kept with its configuration and the fingerprint of the questions it used, so two runs are comparable only when the fingerprints match."), cmp, out, h("h2", null, "All runs"), evalRunTable(rows)];
+  }
 
   async function evalRunDetail(id) {
     const r = await api("/v1/llm/eval/runs/" + id), s = r.summary, g = s.groundedness, rv = s.reviewer, ready = s.readiness;

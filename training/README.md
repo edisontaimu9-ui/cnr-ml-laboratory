@@ -20,7 +20,7 @@ Put it behind https. Then set on the API (Render dashboard, never in the repo):
 Call `POST /v1/llm/summarise` with `"provider": "openweight"` and optionally `"model": "gemma-4-e4b"`. `GET /v1/llm/summarise/status` shows readiness.
 
 ## 2. Fine-tune with LoRA (training, external GPU)
-1. Prepare `train.jsonl` (and optionally `val.jsonl`): reviewed, de-identified chats (see `sample.jsonl`). No patient information.
+1. Get the data from the lab: dashboard **Training data** (add examples, a different person approves them, then **Download JSONL**) or `GET /v1/llm/train/export?split=train` and `split=val`. The files are in the exact format the lab uses when it asks a model a question (see `sample.jsonl`). No patient information.
 2. On the GPU machine (Colab/Kaggle notebook: `!git clone`, `!pip install -r training/requirements.txt`):
 ```
 export HF_TOKEN=...   # only if pushing the adapter
@@ -38,3 +38,6 @@ On the API set `OPENWEIGHT_MODELS=qwen3.5-9b,cnr-qwen` and `OPENWEIGHT_SERVED=cn
 - Compare the adapter with the base model on questions it was not trained on before trusting it. Training on clinical text can make answers fluent and wrong.
 - Keep held-out gold questions out of the training data.
 - Output screens, identifier gate, fact validation and clinician review still apply to every model.
+
+## Compare before you trust (dashboard: RAG evaluation)
+Start two runs on the same question set and split: one with the base model, one with the adapter (choose it under **Answers written by**). Open **Runs**, pick A (base) and B (adapter) and press **Compare**. B replaces A only when the verdict says B is better, no guard is raised and both runs have enough evidence.
