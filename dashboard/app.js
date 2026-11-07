@@ -78,6 +78,7 @@
     { id: "hotspots", label: "Hotspots", perm: "read:hotspots", render: hotspots },
     { id: "nlp", label: "NLP", perm: "read:nlp", render: nlpPage },
     { id: "corpora", label: "NLP corpora", perm: "read:datasets", render: corporaPage },
+    { id: "builder", label: "Corpus builder", perm: "read:datasets", render: builderPage },
     { id: "ask", label: "Ask CNR", perm: "use:llm", render: askPage },
     { id: "eval", label: "RAG evaluation", perm: "read:llm", render: evalPage },
     { id: "summarise", label: "Summarise note", perm: "summarise:llm", render: summarisePage },
@@ -2401,6 +2402,318 @@
     });
     const legend = series.length > 1 ? h("p", { class: "muted" }, series.map((s) => h("span", { style: "margin-right:12px" }, h("span", { style: "color:" + s.color }, "■ "), s.name))) : null;
     return h("div", null, svg, legend, h("p", { class: "muted" }, caption));
+  }
+
+  // ---------- Corpus builder: corpora -> annotation -> quality -> approval -> master datasets -> exports and task datasets ----------
+  // Routes: builder, builder/c<id> (a corpus), builder/masters, builder/m<id> (a master dataset). Building a master never trains a model.
+  const CM_STATE = { draft: "planned", in_review: "watch", approved: "", rejected: "bad" };
+  const cmState = (s) => h("span", { class: "badge " + (CM_STATE[s] ?? "planned") }, s.replace("_", " "));
+  const CM_TASKS = { ner: "Entities (NER)", classification: "Document category", langid: "Language" };
+  let cmInfo = null;
+  const cmMeta = async () => (cmInfo = cmInfo || await api("/v1/cm/info"));
+
+  async function builderPage(arg) {
+    const a = arg || "";
+    let tab = "corpora", body;
+    if (a === "masters") { tab = "masters"; body = await cmMasters(); }
+    else if (/^m\d+$/.test(a)) { tab = "masters"; body = await cmMasterDetail(Number(a.slice(1))); }
+    else if (/^c\d+$/.test(a)) body = await cmCorpusDetail(Number(a.slice(1)));
+    else body = await cmCorpora();
+    const tabs = [["corpora", "Corpora"], ["masters", "Master datasets"]];
+    return [h("h1", null, "Corpus builder"),
+      h("div", { class: "tabs", role: "navigation", "aria-label": "Corpus builder sections" }, tabs.map(([id, label]) =>
+        h("button", { "aria-current": id === tab ? "page" : false, onclick: () => { location.hash = id === "corpora" ? "builder" : "builder/" + id; } }, label))),
+      [].concat(body).flat(Infinity)];
+  }
+
+  const cmCount = (o) => Object.entries(o || {}).map(([k, n]) => k + " " + n).join(", ") || "none";
+
+  // ----- corpora list and creation -----
+  async function cmCorpora() {
+    const [rows, meta] = await Promise.all([api("/v1/cm/corpora"), cmMeta()]);
+    const out = [h("div", { class: "notice" }, "Keep each kind of nutrition text in its own corpus (English, Chichewa, clinical nutrition, foods and nutrients, community nutrition, research documents). Upload CSV, JSONL or TXT, annotate, fix what the quality check finds, and have a reviewer approve it. Approved corpora can then be merged into one versioned master dataset. Merging builds data only: no model is trained, and the corpora themselves are never changed.")];
+    out.push(h("h2", null, "Corpora"));
+    out.push(rows.length
+      ? table(["Corpus", "Domain", "State", "Records", "Annotated", "Not annotated", "Last edited", ""], rows.map((c) => [c.name, meta.domains[c.domain] ? c.domain.replace(/_/g, " ") : c.domain, cmState(c.state), c.records,
+          (c.by_status.annotated || 0) + (c.by_status.reviewed || 0), c.by_status.unannotated || 0, c.last_edited_at ? fmt(c.last_edited_at) : "—",
+          h("button", { class: "link", onclick: () => { location.hash = "builder/c" + c.id; } }, "Open")]))
+      : empty("No corpora yet", can("write:datasets") ? "Create one below, then upload a CSV, JSONL or TXT file into it." : "A data scientist can create corpora."));
+    if (can("write:datasets")) out.push(cmCreateForm(meta));
+    return out;
+  }
+
+  function cmCreateForm(meta) {
+    const err = h("p", { class: "error", role: "alert" });
+    const name = h("input", { id: "cm-name", maxlength: 160, placeholder: "e.g. Chichewa community talks, Zomba" });
+    const dom = h("select", { id: "cm-dom" }, Object.entries(meta.domains).map(([k, v]) => h("option", { value: k }, k.replace(/_/g, " ") + " — " + v)));
+    const lang = h("select", { id: "cm-lang" }, h("option", { value: "" }, "None (each record carries its own)"), meta.languages.map((l) => h("option", { value: l }, langName(l))));
+    const src = h("input", { id: "cm-src", maxlength: 300, placeholder: "Where the text came from" });
+    const desc = h("textarea", { id: "cm-desc", rows: 2, maxlength: 2000, placeholder: "Who collected and annotated it" });
+    const tasks = Object.entries(CM_TASKS).map(([k, v]) => [k, h("input", { type: "checkbox", id: "cm-t-" + k, checked: true }), v]);
+    const go = h("button", { class: "primary", onclick: async () => {
+      err.textContent = "";
+      if (name.value.trim().length < 2) { err.textContent = "Give the corpus a name."; return; }
+      const chosen = tasks.filter((t) => t[1].checked).map((t) => t[0]);
+      if (!chosen.length) { err.textContent = "Choose at least one annotation the corpus needs."; return; }
+      try {
+        const c = await api("/v1/cm/corpora", { method: "POST", body: JSON.stringify({ name: name.value.trim(), domain: dom.value, description: desc.value.trim(), source: src.value.trim() || null, default_lang: lang.value || null, tasks: chosen }) });
+        location.hash = "builder/c" + c.id;
+      } catch (e) { err.textContent = e.message; }
+    } }, "Create corpus");
+    return h("details", { class: "card" }, h("summary", null, "Create a corpus"),
+      h("div", { class: "form3" }, field("Name", name, "cm-name"), field("Domain", dom, "cm-dom"), field("Default language", lang, "cm-lang"), field("Source", src, "cm-src")),
+      field("Description", desc, "cm-desc"),
+      h("p", null, h("b", null, "Annotations this corpus must have before approval: "), tasks.map(([k, box, label]) => h("label", { style: "margin-right:1rem" }, box, " " + label))),
+      h("p", { class: "muted" }, "A language-only corpus (for example a TXT file of plain sentences) needs just the language. Choose what the corpus is meant for."), err, go);
+  }
+
+  // ----- one corpus -----
+  async function cmCorpusDetail(id) {
+    const [c, q, meta] = await Promise.all([api("/v1/cm/corpora/" + id), api("/v1/cm/corpora/" + id + "/quality"), cmMeta()]);
+    const reload = () => show("builder/c" + id, true);
+    const out = [backLink("builder", "All corpora"), h("h2", null, c.name, " ", cmState(c.state)),
+      h("p", { class: "muted" }, c.domain.replace(/_/g, " ") + (c.source ? " · source: " + c.source : "") + (c.default_lang ? " · default language: " + langName(c.default_lang) : "") + " · needs: " + c.tasks.map((t) => CM_TASKS[t]).join(", ")),
+      c.description ? h("p", null, c.description) : null,
+      c.state === "rejected" && c.review_note ? h("div", { class: "notice" }, h("b", null, "Rejected by " + (c.reviewed_by || "a reviewer") + ": "), c.review_note) : null,
+      c.state === "approved" ? h("div", { class: "notice ok" }, "Approved by " + (c.reviewed_by || "a reviewer") + " on " + fmt(c.reviewed_at) + ". Snapshot " + c.latest_snapshot + " is frozen. Editing this corpus withdraws the approval; masters already built keep their snapshot.") : null,
+      h("div", { class: "stats" }, nlpStat("Records", c.records), nlpStat("Annotated", c.by_status.annotated || 0), nlpStat("Reviewed", c.by_status.reviewed || 0), nlpStat("Not annotated", c.by_status.unannotated || 0), nlpStat("Rejected", c.by_status.rejected || 0))];
+    out.push(cmQuality(c, q, reload), cmWorkflow(c, q, reload));
+    if (can("write:datasets")) out.push(cmUpload(c, reload));
+    if (can("read:dataset_rows") && c.records) out.push(cmRecords(c, meta, reload));
+    if (c.uploads.length) out.push(h("h3", null, "Uploads (kept as ingested)"), table(["File", "Format", "Records", "Added by", "Added", ""], c.uploads.map((u) =>
+      [u.filename || "—", u.format, u.records, u.created_by || "—", fmt(u.created_at), can("read:dataset_rows") ? h("button", { class: "link", onclick: async () => saveBlob(await api("/v1/cm/corpora/" + c.id + "/uploads/" + u.id + "/original", { blob: true }), "corpus" + c.id + "-upload" + u.id + "-original.jsonl.gz") }, "Download original") : ""])));
+    if (c.snapshots.length) out.push(h("h3", null, "Approved snapshots"), table(["Snapshot", "Documents", "Approved by", "Note", "When", "SHA-256"], c.snapshots.map((s) => ["#" + s.number, s.documents, s.approved_by || "—", s.approval_note || "—", fmt(s.created_at), s.sha256.slice(0, 12) + "…"])));
+    return out;
+  }
+
+  function cmQuality(c, q, reload) {
+    const out = [h("h3", null, "Quality check")];
+    out.push(q.ready_for_approval ? h("div", { class: "notice ok" }, "No blockers. This corpus can be submitted for review.") : h("div", { class: "notice" }, h("b", null, "Blockers before review:"), h("ul", { class: "plain" }, q.blockers.map((b) => h("li", null, b)))));
+    const kinds = [...Object.entries(q.missing).filter(([k]) => k !== "records").map(([k, v]) => [k, v, "missing"]), ...Object.entries(q.invalid).filter(([k]) => k !== "records").map(([k, v]) => [k, v, "invalid"])];
+    out.push(h("div", { class: "stats" }, nlpStat("Missing annotation", q.missing.records), nlpStat("Invalid annotation", q.invalid.records), nlpStat("Duplicate groups", q.duplicates.groups), nlpStat("Disagreeing duplicates", q.duplicates.conflicting_groups)));
+    if (kinds.length) out.push(table(["Problem", "Records", "Example record ids"], kinds.map(([k, v]) => [k.replace(/_/g, " "), v.count, v.sample.slice(0, 8).map((x) => "#" + x.id).join(", ")])));
+    if (q.duplicates.groups && can("write:datasets")) out.push(h("p", null, h("button", { onclick: async () => { await api("/v1/cm/corpora/" + c.id + "/resolve-duplicates", { method: "POST" }); reload(); } }, "Keep one copy of each duplicate"), " The best-annotated copy stays; the others are rejected, not deleted."));
+    const langs = Object.keys(q.by_language).sort(), labels = Object.keys(q.by_label).sort();
+    if (langs.length) out.push(table(["Language", "Records", ...labels.map(labelName)], langs.map((l) => [langName(l), q.by_language[l], ...labels.map((k) => (q.label_by_language[l] || {})[k] || 0)])));
+    if (Object.keys(q.by_category).length) out.push(h("p", { class: "muted" }, "Document categories: " + cmCount(q.by_category) + "."));
+    (q.warnings || []).forEach((w) => out.push(h("div", { class: "notice" }, w)));
+    return h("div", { class: "card" }, out);
+  }
+
+  function cmWorkflow(c, q, reload) {
+    const err = h("p", { class: "error", role: "alert" });
+    const out = [];
+    const call = (path, body) => async () => {
+      err.textContent = "";
+      try { await api("/v1/cm/corpora/" + c.id + "/" + path, { method: "POST", body: body ? JSON.stringify(body()) : undefined }); reload(); }
+      catch (e) { err.textContent = e.message + (e.detail && e.detail.blockers ? " " + e.detail.blockers.join(" ") : ""); }
+    };
+    if ((c.state === "draft" || c.state === "rejected") && can("write:datasets")) out.push(h("button", { class: "primary", disabled: !q.ready_for_approval, onclick: call("submit") }, "Submit for review"));
+    if (c.state === "in_review" && can("approve:corpora")) {
+      const note = h("textarea", { id: "cm-note", rows: 2, maxlength: 2000, placeholder: "Review note (required): what was checked and by whom" });
+      const need = (fn) => () => { if (note.value.trim().length < 5) { err.textContent = "Write a review note (at least 5 characters)."; return; } return fn(); };
+      out.push(h("p", null, "This corpus is waiting for review. A corpus must be approved by someone other than the person who last edited it."), field("Review note", note, "cm-note"),
+        h("button", { class: "primary", onclick: need(call("approve", () => ({ note: note.value.trim() }))) }, "Approve and freeze snapshot"), " ",
+        h("button", { onclick: need(call("reject", () => ({ note: note.value.trim() }))) }, "Reject"));
+    } else if (c.state === "in_review") out.push(h("p", { class: "muted" }, "Waiting for a clinical reviewer or administrator."));
+    return out.length ? h("div", { class: "card" }, h("h3", null, "Review and approval"), out, err) : null;
+  }
+
+  function cmUpload(c, reload) {
+    const file = h("input", { id: "cm-file", type: "file", accept: ".csv,.jsonl,.ndjson,.txt" });
+    const lang = h("select", { id: "cm-ulang" }, h("option", { value: "" }, c.default_lang ? "Corpus default (" + langName(c.default_lang) + ")" : "From the file"), Object.entries(LANGS).map(([k, v]) => h("option", { value: k }, v)));
+    const src = h("input", { id: "cm-usrc", maxlength: 120, placeholder: "Optional source label" });
+    const err = h("p", { class: "error", role: "alert" }), result = h("div");
+    const build = () => { const fd = new FormData(); fd.append("file", file.files[0]); if (lang.value) fd.append("lang", lang.value); if (src.value.trim()) fd.append("source", src.value.trim()); return fd; };
+    const show1 = (r) => [h("div", { class: "stats" }, nlpStat("Records", r.report.records), nlpStat("Annotated", r.report.annotated), nlpStat("Not annotated", r.report.unannotated), nlpStat("Skipped", r.skipped_total || 0), nlpStat("Repeated in file", r.report.repeated_in_file)),
+      ...(r.report.warnings || []).map((w) => h("div", { class: "notice" }, w)), r.skipped_total ? listOf(r.skipped, r.skipped_total) : null,
+      r.identifier_lines_total ? [h("div", { class: "notice" }, h("b", null, "Identifiers found. "), r.identifier_lines_total + " line(s) look like they hold personal identifiers (" + Object.keys(r.identifier_types).join(", ") + "). The file is refused whole."), listOf(r.identifier_lines, r.identifier_lines_total)] : null];
+    const check = h("button", { onclick: async () => {
+      err.textContent = ""; result.replaceChildren();
+      if (!file.files[0]) { err.textContent = "Choose a file first."; return; }
+      try { result.replaceChildren(...show1(await api("/v1/cm/corpora/" + c.id + "/inspect", { method: "POST", body: build() })).flat(Infinity).filter(Boolean)); } catch (e) { err.textContent = e.message; }
+    } }, "Check file");
+    const add = h("button", { class: "primary", onclick: async () => {
+      err.textContent = "";
+      if (!file.files[0]) { err.textContent = "Choose a file first."; return; }
+      try { await api("/v1/cm/corpora/" + c.id + "/uploads", { method: "POST", body: build() }); reload(); }
+      catch (e) { err.textContent = e.message; if (e.detail) result.replaceChildren(...show1(e.detail).flat(Infinity).filter(Boolean)); }
+    } }, "Add to corpus");
+    return h("details", { class: "card" }, h("summary", null, "Upload CSV, JSONL or TXT"),
+      h("ul", { class: "plain" }, Object.entries((cmInfo || {}).upload_formats || {}).map(([k, v]) => h("li", null, h("b", null, k.toUpperCase() + ": "), v))),
+      h("p", { class: "muted" }, "Text with identifiers is refused whole. Only text, language, category, entities, source and id are kept. A CSV with an empty entities cell counts as not yet annotated; in JSONL an empty list [] confirms there are none. A file can be added only once. Editing an approved corpus withdraws its approval."),
+      h("div", { class: "form3" }, field("File", file, "cm-file"), field("Language for records without one", lang, "cm-ulang"), field("Source label", src, "cm-usrc")),
+      check, " ", add, err, result);
+  }
+
+  // ----- records and annotation -----
+  function cmRecords(c, meta, reload) {
+    const st = { status: "", problem: "", lang: "", q: "", offset: 0, limit: 25 };
+    const box = h("div"), panel = h("div"), err = h("p", { class: "error", role: "alert" });
+    const sel = (id, opts, key) => h("select", { id, onchange: (e) => { st[key] = e.target.value; st.offset = 0; load(); } }, opts.map(([v, l]) => h("option", { value: v }, l)));
+    const search = h("input", { id: "cm-rq", placeholder: "Search text", onchange: (e) => { st.q = e.target.value.trim(); st.offset = 0; load(); } });
+    const bar = h("div", { class: "form3" },
+      field("Status", sel("cm-rs", [["", "All"], ...meta.statuses.map((s) => [s, s])], "status"), "cm-rs"),
+      field("Problem", sel("cm-rp", [["", "Any"], ["missing", "Missing annotation"], ["invalid", "Invalid annotation"], ["duplicate", "Duplicate"], ["any", "Any problem"]], "problem"), "cm-rp"),
+      field("Language", sel("cm-rl", [["", "All"], ...meta.languages.map((l) => [l, langName(l)])], "lang"), "cm-rl"), field("Search", search, "cm-rq"));
+    async function load() {
+      err.textContent = "";
+      const p = new URLSearchParams({ limit: st.limit, offset: st.offset });
+      for (const k of ["status", "problem", "lang", "q"]) if (st[k]) p.set(k, st[k]);
+      try {
+        const r = await api("/v1/cm/corpora/" + c.id + "/records?" + p);
+        const rows = r.records.map((x) => [can("write:datasets") ? h("button", { class: "link", onclick: () => panel.replaceChildren(annotator(x)) }, "Annotate #" + x.id) : "#" + x.id, h("span", null, x.text.length > 140 ? x.text.slice(0, 140) + "…" : x.text), x.lang ? langName(x.lang) : "—", x.category ? x.category.replace(/_/g, " ") : "—",
+          x.entities == null ? "—" : x.entities.length ? x.entities.map((e) => x.text.slice(e.start, e.end) + " [" + e.label + "]").join(", ") : "none",
+          h("span", { class: "badge " + (x.status === "rejected" ? "bad" : x.status === "unannotated" ? "planned" : "") }, x.status),
+          x.issues.map((i) => h("span", { class: "badge watch", title: i.problem, style: "margin-right:4px" }, i.code.replace(/_/g, " ")))]);
+        const from = r.total ? st.offset + 1 : 0, to = Math.min(st.offset + st.limit, r.total);
+        box.replaceChildren(r.total ? table(["Record", "Text", "Language", "Category", "Entities", "Status", "Problems"], rows) : empty("No records match", "Change the filters."),
+          h("p", { class: "muted" }, from + "–" + to + " of " + r.total + " ",
+            h("button", { class: "link", disabled: st.offset === 0, onclick: () => { st.offset = Math.max(0, st.offset - st.limit); load(); } }, "← Previous"), " ",
+            h("button", { class: "link", disabled: to >= r.total, onclick: () => { st.offset += st.limit; load(); } }, "Next →")));
+      } catch (e) { err.textContent = e.message; }
+    }
+    function annotator(x) {
+      const e2 = h("p", { class: "error", role: "alert" });
+      let ents = x.entities == null ? [] : x.entities.map((e) => ({ ...e }));
+      let touched = false;
+      const lang = h("select", { id: "an-lang" }, h("option", { value: "" }, "— none —"), meta.languages.map((l) => h("option", { value: l, selected: x.lang === l }, langName(l))));
+      const cat = h("select", { id: "an-cat" }, h("option", { value: "" }, "— none —"), meta.categories.map((k) => h("option", { value: k, selected: x.category === k }, k.replace(/_/g, " "))));
+      const list = h("div"), word = h("input", { id: "an-word", placeholder: "Word or phrase to mark" });
+      const lab = h("select", { id: "an-lab" }, meta.entity_labels.map((k) => h("option", { value: k }, labelName(k))));
+      const draw = () => list.replaceChildren(ents.length ? h("ul", { class: "plain" }, ents.map((e, i) => h("li", null, x.text.slice(e.start, e.end) + " → " + labelName(e.label) + " ", h("button", { class: "link", onclick: () => { ents.splice(i, 1); touched = true; draw(); } }, "remove")))) : h("p", { class: "muted" }, x.entities == null ? "Entities not annotated yet." : "No entities."));
+      draw();
+      const addEnt = h("button", { onclick: () => {
+        e2.textContent = "";
+        const w = word.value.trim();
+        if (!w) { e2.textContent = "Type the word or phrase to mark."; return; }
+        const rx = new RegExp("(?<![\\p{L}\\p{N}_])" + w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(?![\\p{L}\\p{N}_])", "giu");
+        let m, n = 0;
+        while ((m = rx.exec(x.text))) {
+          const s = m.index, en = s + m[0].length;
+          if (!ents.some((e) => s < e.end && en > e.start)) { ents.push({ start: s, end: en, label: lab.value }); n++; }
+          if (m[0].length === 0) rx.lastIndex++;
+        }
+        if (!n) { e2.textContent = "That word was not found, or it overlaps an entity already marked."; return; }
+        ents.sort((a, b) => a.start - b.start); touched = true; word.value = ""; draw();
+      } }, "Mark");
+      const save = (status, extra = {}) => async () => {
+        e2.textContent = "";
+        const body = { lang: lang.value || null, status, ...extra };
+        if (cat.value) body.category = cat.value; else if (x.category) body.clear_category = true;
+        if (touched || ents.length || x.entities != null) body.entities = ents;
+        try { await api("/v1/cm/corpora/" + c.id + "/records/" + x.id, { method: "PATCH", body: JSON.stringify(body) }); panel.replaceChildren(); reload(); }
+        catch (e) { e2.textContent = e.message; }
+      };
+      return h("div", { class: "card" }, h("h3", null, "Record #" + x.id + " ", h("span", { class: "badge" }, x.status)), h("p", null, x.text),
+        x.issues.length ? h("p", null, x.issues.map((i) => h("span", { class: "badge watch", style: "margin-right:4px" }, i.problem))) : null,
+        h("div", { class: "form3" }, field("Language", lang, "an-lang"), field("Document category", cat, "an-cat")),
+        h("h4", null, "Entities"), list, h("div", { class: "form3" }, field("Word or phrase", word, "an-word"), field("Label", lab, "an-lab")), addEnt,
+        h("p", { class: "muted" }, "Every whole-word match is marked. Save with no entities to confirm there are none."), e2,
+        h("p", null, h("button", { class: "primary", onclick: save("annotated") }, "Save as annotated"), " ", h("button", { onclick: save("reviewed") }, "Save and mark reviewed"), " ",
+          h("button", { onclick: save("rejected") }, "Reject record"), " ", h("button", { class: "link", onclick: () => panel.replaceChildren() }, "Close")));
+    }
+    load();
+    return h("div", { class: "card" }, h("h3", null, "Records"), bar, err, box, panel);
+  }
+
+  // ----- master datasets -----
+  async function cmMasters() {
+    const [rows, corpora, meta] = await Promise.all([api("/v1/cm/masters"), api("/v1/cm/corpora?state=approved"), cmMeta()]);
+    const out = [h("div", { class: "notice" }, "A master dataset merges the latest approved snapshots of the corpora you choose into one versioned dataset. Duplicate texts across corpora become one row that lists every source. Building a master does not train anything and does not change the corpora.")];
+    out.push(h("h2", null, "Master datasets"));
+    out.push(rows.length ? table(["Name", "Version", "Records", "Corpora", "Built by", "Built", "SHA-256", ""], rows.map((m) => [m.name, "v" + m.version, m.records, m.sources.map((s) => s.name).join(", "), m.created_by || "—", fmt(m.created_at), m.sha256.slice(0, 12) + "…",
+      h("button", { class: "link", onclick: () => { location.hash = "builder/m" + m.id; } }, "Open")])) : empty("No master datasets yet", "Approve at least one corpus, then build one below."));
+    if (can("write:datasets")) out.push(cmMergeForm(corpora, meta));
+    return out;
+  }
+
+  function cmMergeForm(corpora, meta) {
+    const chosen = [];                                         // ids in the order ticked: earlier means higher priority
+    const err = h("p", { class: "error", role: "alert" }), result = h("div");
+    const name = h("input", { id: "mg-name", value: "cnr-nutrition-master", maxlength: 120 });
+    const note = h("input", { id: "mg-note", maxlength: 2000, placeholder: "Optional note: why this version was built" });
+    const pol = h("select", { id: "mg-pol" }, Object.entries(meta.conflict_policies).map(([k, v]) => h("option", { value: k }, k.replace(/_/g, " ") + " — " + v)));
+    const marks = {};
+    const list = corpora.length ? h("ul", { class: "plain" }, corpora.map((c) => {
+      marks[c.id] = h("span", { class: "muted" });
+      return h("li", null, h("label", null, h("input", { type: "checkbox", onchange: (e) => { const i = chosen.indexOf(c.id); if (e.target.checked && i < 0) chosen.push(c.id); if (!e.target.checked && i >= 0) chosen.splice(i, 1); paint(); } }),
+        " " + c.name + " (" + c.records + " records, " + c.domain.replace(/_/g, " ") + ") "), marks[c.id]);
+    })) : h("p", { class: "muted" }, "No corpus is approved yet. A corpus must pass the quality check and be approved by a reviewer first.");
+    const paint = () => corpora.forEach((c) => { const i = chosen.indexOf(c.id); marks[c.id].textContent = i >= 0 ? "priority " + (i + 1) : ""; });
+    const body = () => ({ name: name.value.trim(), corpus_ids: chosen, on_conflict: pol.value, note: note.value.trim() || null });
+    const guard = () => { err.textContent = ""; if (!chosen.length) { err.textContent = "Tick at least one approved corpus."; return false; } return true; };
+    const prev = h("button", { onclick: async () => {
+      if (!guard()) return;
+      try { const r = await api("/v1/cm/masters/preview", { method: "POST", body: JSON.stringify(body()) }); result.replaceChildren(h("h3", null, "Preview (nothing stored)"), ...masterReport(r.report)); }
+      catch (e) { err.textContent = e.message; if (e.detail && e.detail.conflicts) result.replaceChildren(conflictTable(e.detail.conflicts)); }
+    } }, "Preview merge");
+    const go = h("button", { class: "primary", onclick: async () => {
+      if (!guard()) return;
+      try { const m = await api("/v1/cm/masters", { method: "POST", body: JSON.stringify(body()) }); location.hash = "builder/m" + m.id; }
+      catch (e) { err.textContent = e.message; if (e.detail && e.detail.conflicts) result.replaceChildren(conflictTable(e.detail.conflicts)); }
+    } }, "Build master version");
+    return h("details", { class: "card" }, h("summary", null, "Merge approved corpora into a master dataset"), h("p", null, "Tick the corpora in priority order. The latest approved snapshot of each is used."), list,
+      h("div", { class: "form3" }, field("Master dataset name (a new version is added if the name exists)", name, "mg-name"), field("If annotations disagree", pol, "mg-pol"), field("Note", note, "mg-note")),
+      err, prev, " ", go, result);
+  }
+
+  const conflictTable = (cs) => table(["Disagreeing fields", "Corpora", "Records (corpus, id)"], cs.map((c) => [c.fields.join(", "), c.corpora.join(", "), c.records.map((r) => r.join(":")).join(" · ")]));
+
+  function masterReport(r) {
+    return [h("div", { class: "stats" }, nlpStat("Records in", r.records_in), nlpStat("Records out", r.records_out), nlpStat("Duplicates merged", r.duplicates_merged), nlpStat("Conflicts", r.conflicts), nlpStat("Left out for conflict", r.records_left_out_for_conflict)),
+      h("p", { class: "muted" }, "Languages: " + cmCount(r.by_language) + ". Categories: " + cmCount(r.by_category) + ". Domains: " + cmCount(r.by_domain) + ". Entity labels: " + cmCount(r.by_label) + "."),
+      h("p", { class: "muted" }, "Ready for each task: " + Object.entries(r.task_ready).map(([k, n]) => CM_TASKS[k] + " " + n).join(", ") + "."),
+      r.conflicts ? [h("p", null, "Conflict policy: " + r.conflict_policy.replace(/_/g, " ") + "."), conflictTable(r.conflict_sample)] : null];
+  }
+
+  async function cmMasterDetail(id) {
+    const [m, meta] = await Promise.all([api("/v1/cm/masters/" + id), cmMeta()]);
+    const out = [backLink("builder/masters", "All master datasets"), h("h2", null, m.name + " v" + m.version),
+      h("p", { class: "muted" }, "Built by " + (m.created_by || "—") + " on " + fmt(m.created_at) + " · SHA-256 " + m.sha256 + (m.note ? " · " + m.note : "")),
+      h("h3", null, "Sources (frozen snapshots)"), table(["Corpus", "Snapshot", "SHA-256"], m.sources.map((s) => [s.name, "#" + s.snapshot_number, s.snapshot_sha256.slice(0, 12) + "…"])),
+      h("h3", null, "Report"), ...masterReport(m.report)];
+    if (can("read:dataset_rows")) out.push(cmExport(m, meta), cmTaskBuilder(m, meta));
+    return out;
+  }
+
+  function cmExport(m, meta) {
+    const fmtSel = h("select", { id: "ex-fmt" }, meta.export_formats.map((f) => h("option", { value: f }, f.toUpperCase())));
+    const safe = h("input", { type: "checkbox", id: "ex-safe" });
+    const err = h("p", { class: "error", role: "alert" });
+    return h("div", { class: "card" }, h("h3", null, "Export the master dataset"),
+      h("p", { class: "muted" }, "Columns: uid, text, lang, category, entities, annotation_status, source, corpora, domains. In CSV and Parquet the entities are a JSON string; in JSONL they are a real list."),
+      h("div", { class: "form3" }, field("Format", fmtSel, "ex-fmt")), h("p", null, h("label", null, safe, " Spreadsheet-safe CSV (adds an apostrophe to text that starts with = + - or @; this changes the text)")), err,
+      h("button", { class: "primary", onclick: async () => {
+        err.textContent = "";
+        try { saveBlob(await api("/v1/cm/masters/" + m.id + "/export?format=" + fmtSel.value + (safe.checked ? "&spreadsheet_safe=true" : ""), { blob: true }), m.name + "-v" + m.version + "." + fmtSel.value); } catch (e) { err.textContent = e.message; }
+      } }, "Download"));
+  }
+
+  function cmTaskBuilder(m, meta) {
+    const task = h("select", { id: "tk-task" }, Object.entries(meta.tasks).map(([k, v]) => h("option", { value: k }, v)));
+    const fmtSel = h("select", { id: "tk-fmt" }, meta.export_formats.slice().sort((a, b) => (a === "jsonl" ? -1 : b === "jsonl" ? 1 : 0)).map((f) => h("option", { value: f }, f.toUpperCase())));
+    const num = (id, v, step) => h("input", { id, type: "number", value: v, min: 0, step });
+    const test = num("tk-test", 0.1, 0.05), val = num("tk-val", 0.1, 0.05), seed = num("tk-seed", 42, 1);
+    const mixed = h("input", { type: "checkbox", id: "tk-mixed" });
+    const err = h("p", { class: "error", role: "alert" }), result = h("div");
+    const qs = () => "test_size=" + test.value + "&val_size=" + val.value + "&seed=" + seed.value + "&include_mixed=" + mixed.checked;
+    const summary = h("button", { onclick: async () => {
+      err.textContent = ""; result.replaceChildren();
+      try {
+        const r = await api("/v1/cm/masters/" + m.id + "/tasks/" + task.value + "/summary?" + qs());
+        result.replaceChildren(h("div", { class: "stats" }, nlpStat("Records", r.records), nlpStat("Left out", r.excluded_total), ...Object.entries(r.by_split).map(([k, n]) => nlpStat(k, n))),
+          h("p", { class: "muted" }, "Classes: " + cmCount(r.classes) + (r.excluded_total ? ". Left out: " + cmCount(r.excluded) : "") + "."), ...r.warnings.map((w) => h("div", { class: "notice" }, w)));
+      } catch (e) { err.textContent = e.message; }
+    } }, "Preview");
+    const dl = h("button", { class: "primary", onclick: async () => {
+      err.textContent = "";
+      try { saveBlob(await api("/v1/cm/masters/" + m.id + "/tasks/" + task.value + "/export?format=" + fmtSel.value + "&" + qs(), { blob: true }), m.name + "-v" + m.version + "-" + task.value + "." + fmtSel.value); } catch (e) { err.textContent = e.message; }
+    } }, "Download task dataset");
+    return h("div", { class: "card" }, h("h3", null, "Task datasets"),
+      h("p", { class: "muted" }, "Built on request from this master version, with a repeatable stratified train, validation and test split (use 0 for no split). Same version, options and seed give the same file. Nothing is trained. The NER file in JSONL can be uploaded to NLP corpora like any annotated corpus."),
+      h("div", { class: "form3" }, field("Task", task, "tk-task"), field("Format", fmtSel, "tk-fmt"), field("Test share", test, "tk-test"), field("Validation share", val, "tk-val"), field("Seed", seed, "tk-seed")),
+      h("p", null, h("label", null, mixed, " Keep mixed-language texts (language identification only)")), err, summary, " ", dl, result);
   }
 
   function table(head, rows) {

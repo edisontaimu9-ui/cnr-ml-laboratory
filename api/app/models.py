@@ -363,3 +363,100 @@ class LlmTrainExample(Base):
     reviewed_by_key_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+# ---------------------------------------------------------------- Corpus Manager & Dataset Builder
+# Working corpora (editable, annotated, quality-checked) -> approved snapshots (frozen) -> versioned master datasets (merged on request).
+# Nothing here is linked to training: a master dataset never starts a run.
+class CmCorpus(Base):
+    __tablename__ = "mlab_cm_corpora"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(160), unique=True)
+    domain: Mapped[str] = mapped_column(String(40))
+    description: Mapped[str] = mapped_column(Text, default="")
+    source: Mapped[str | None] = mapped_column(String(300), nullable=True)           # where the text came from
+    default_lang: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    tasks_json: Mapped[list] = mapped_column(JSON, default=list)                      # which annotations the corpus must have: ner, classification, langid
+    state: Mapped[str] = mapped_column(String(16), default="draft")                  # draft | in_review | approved | rejected
+    review_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reviewed_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_edited_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    last_edited_key_id: Mapped[int | None] = mapped_column(Integer, nullable=True)   # the reviewer must be someone else
+    last_edited_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class CmUpload(Base):
+    """One file added to a corpus. `storage_uri` holds the records exactly as ingested (before any annotation edit): the preserved original.
+    The raw file is not kept, so columns the lab does not use never reach storage."""
+    __tablename__ = "mlab_cm_uploads"
+    __table_args__ = (UniqueConstraint("corpus_id", "source_sha256"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    corpus_id: Mapped[int] = mapped_column(ForeignKey("mlab_cm_corpora.id"), index=True)
+    filename: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    format: Mapped[str] = mapped_column(String(8))
+    source_sha256: Mapped[str] = mapped_column(String(64))
+    sha256: Mapped[str] = mapped_column(String(64))                                  # of the stored original copy
+    storage_uri: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    record_count: Mapped[int] = mapped_column(Integer, default=0)
+    report_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class CmRecord(Base):
+    """One text with its annotation. Records are never deleted: an unwanted one is `rejected` and kept for the audit trail."""
+    __tablename__ = "mlab_cm_records"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    corpus_id: Mapped[int] = mapped_column(ForeignKey("mlab_cm_corpora.id"), index=True)
+    upload_id: Mapped[int | None] = mapped_column(ForeignKey("mlab_cm_uploads.id"), nullable=True)
+    text: Mapped[str] = mapped_column(Text)
+    norm_hash: Mapped[str] = mapped_column(String(64), index=True)
+    lang: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    category: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    entities_json: Mapped[list | None] = mapped_column(JSON, nullable=True)           # None = not annotated; [] = confirmed no entities
+    parse_note: Mapped[str | None] = mapped_column(String(300), nullable=True)        # an annotation that could not be read at upload
+    status: Mapped[str] = mapped_column(String(16), default="unannotated", index=True)
+    source: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    ext_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    row_ref: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    annotated_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    annotated_key_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reviewed_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class CmSnapshot(Base):
+    """The frozen content of a corpus at approval. Masters merge snapshots, so editing a corpus later never changes a master."""
+    __tablename__ = "mlab_cm_snapshots"
+    __table_args__ = (UniqueConstraint("corpus_id", "number"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    corpus_id: Mapped[int] = mapped_column(ForeignKey("mlab_cm_corpora.id"), index=True)
+    number: Mapped[int] = mapped_column(Integer)
+    sha256: Mapped[str] = mapped_column(String(64))
+    storage_uri: Mapped[str] = mapped_column(String(500))
+    doc_count: Mapped[int] = mapped_column(Integer, default=0)
+    report_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    approved_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    approval_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class CmMaster(Base):
+    """A versioned master nutrition dataset: approved corpus snapshots merged on request. Immutable once built."""
+    __tablename__ = "mlab_cm_masters"
+    __table_args__ = (UniqueConstraint("name", "version"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(120), index=True)
+    version: Mapped[int] = mapped_column(Integer)
+    sources_json: Mapped[list] = mapped_column(JSON, default=list)                    # [{corpus_id, name, snapshot_id, snapshot_sha256}]
+    on_conflict: Mapped[str] = mapped_column(String(20))
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    record_count: Mapped[int] = mapped_column(Integer, default=0)
+    sha256: Mapped[str] = mapped_column(String(64))
+    storage_uri: Mapped[str] = mapped_column(String(500))
+    report_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
