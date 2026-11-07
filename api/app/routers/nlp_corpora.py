@@ -119,12 +119,10 @@ def annotation_template():
 async def prelabel(request: Request, file: UploadFile = File(...), lang: str | None = Form(None),
                    p: Principal = Depends(require("run:nlp")), db: Session = Depends(get_db)):
     """Upload plain sentences (.txt, one per line, or a .csv with a text column) or a document (.docx .pptx .odt .pdf .html .md) and get back an annotation CSV holding the engine's
-    guesses for speakers to correct. Nothing is stored. A file with identifiers is refused whole."""
+    guesses for speakers to correct. Nothing is stored. Identifiers are replaced by placeholders such as [PHONE]. lang may be a code or a pair such as en+ny."""
     if not _limiter.hit(str(p.key_id)):
         raise HTTPException(429, "Too many requests. Wait a moment.", headers={"Retry-After": str(_limiter.retry_after(str(p.key_id)))})
     lang = (lang or "").strip().lower() or None
-    if lang is not None and lang not in nlp_corpus.LANG_CODES:
-        raise HTTPException(422, "lang must be one of " + ", ".join(sorted(nlp_corpus.LANG_CODES)))
     try:
         res = nlp_prelabel.prelabel(await _read_upload(file), file.filename or "", lang)
     except (nlp_prelabel.PrelabelError, nlp_formats.FormatError) as e:
@@ -134,7 +132,8 @@ async def prelabel(request: Request, file: UploadFile = File(...), lang: str | N
     return Response(res["csv"], media_type="text/csv; charset=utf-8",
                     headers={"Content-Disposition": 'attachment; filename="cnr-nlp-prelabel.csv"',
                              "X-Prelabel-Documents": str(res["report"]["documents"]),
-                             "X-Prelabel-Guessed-Entities": str(res["report"]["guessed_entities"])})
+                             "X-Prelabel-Guessed-Entities": str(res["report"]["guessed_entities"]),
+                             "X-Prelabel-Identifiers-Removed": str(res["report"]["identifier_lines_removed"])})
 
 
 @router.post("/inspect")

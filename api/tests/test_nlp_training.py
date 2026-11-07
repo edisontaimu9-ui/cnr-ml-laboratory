@@ -60,8 +60,8 @@ def test_trial_lowers_the_bar_and_says_so():
 
 
 def test_enough_data_passes_but_small_language_is_flagged():
-    warnings = nt.check_enough(synthetic(80, 60), trial=False)
-    assert any("Only 60 ny" in w for w in warnings) and not any("TRIAL" in w for w in warnings)
+    warnings = nt.check_enough(synthetic(80, 40), trial=False)
+    assert any("Only 40 ny" in w for w in warnings) and not any("TRIAL" in w for w in warnings)
 
 
 def test_split_is_stratified_disjoint_and_repeatable():
@@ -130,7 +130,7 @@ def test_api_flow_refuses_small_then_trial_runs_and_reads_back(client):
     assert got["summary"]["trial"] is True and got["results"]["warnings"][0].startswith("TRIAL") and got["corpus_version"] == 1
     assert "artifact_uri" not in json.dumps(got)
     assert client.get("/v1/nlp/training", headers=ADMIN).json()[0]["id"] == got["id"]
-    assert client.get("/v1/nlp/training/limits", headers=ADMIN).json()["minimums"]["examples_per_label"] == 50
+    assert client.get("/v1/nlp/training/limits", headers=ADMIN).json()["minimums"]["examples_per_label"] == 20
     assert client.get("/v1/nlp/training/9999", headers=ADMIN).status_code == 404
     assert client.post("/v1/nlp/training", json={"corpus_id": 9999}, headers=ADMIN).status_code == 404
 

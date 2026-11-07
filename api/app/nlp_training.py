@@ -22,8 +22,8 @@ from pathlib import Path
 
 from . import nlp_corpus, nlp_lab
 
-MIN_EXAMPLES_PER_LABEL = nlp_corpus.MIN_EXAMPLES_PER_LABEL          # 50
-MIN_DOCS = 100
+MIN_EXAMPLES_PER_LABEL = nlp_corpus.MIN_EXAMPLES_PER_LABEL          # 20
+MIN_DOCS = nlp_corpus.MIN_DOCS_PER_LANG                           # 50
 TRIAL_MIN_EXAMPLES_PER_LABEL = 5
 TRIAL_MIN_DOCS = 10
 MIN_SUPPORT = 20                  # gold entities needed in a test cell before it gets a verdict

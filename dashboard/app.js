@@ -1318,8 +1318,9 @@
 
   function annotationTools() {
     const err = h("p", { class: "error", role: "alert" });
+    const done = h("p", { class: "muted", role: "status" });
     const file = h("input", { id: "pl-file", type: "file", accept: ".txt,.csv,.docx,.pptx,.odt,.pdf,.html,.htm,.md" });
-    const lang = h("select", { id: "pl-lang" }, h("option", { value: "" }, "Guess from the text"), Object.entries(LANGS).map(([k, v]) => h("option", { value: k }, v)));
+    const lang = h("select", { id: "pl-lang" }, h("option", { value: "" }, "Guess from the text"), h("option", { value: "en+ny" }, "English and Chichewa (each sentence)"), Object.entries(LANGS).map(([k, v]) => h("option", { value: k }, v)));
     const tpl = h("button", { onclick: async () => {
       err.textContent = "";
       try { saveBlob(await api("/v1/nlp/corpora/template", { blob: true }), "cnr-nlp-annotation-template.csv"); } catch (e) { err.textContent = e.message; }
@@ -1327,17 +1328,22 @@
     const out = [h("p", null, tpl, " A blank sheet with example rows in English, Chichewa, Tumbuka and Yao (the Yao row is a placeholder). Delete the example rows before uploading.")];
     if (can("run:nlp")) {
       const pre = h("button", { class: "primary", onclick: async () => {
-        err.textContent = "";
+        err.textContent = ""; done.textContent = "";
         const f = file.files[0];
         if (!f) { err.textContent = "Choose a document (.docx, .pdf, .pptx, .odt, .html, .md), a .txt file (one sentence per line) or a .csv file with a text column first."; return; }
         const fd = new FormData(); fd.append("file", f); if (lang.value) fd.append("lang", lang.value);
-        try { saveBlob(await api("/v1/nlp/corpora/prelabel", { method: "POST", body: fd, blob: true }), "cnr-nlp-prelabel.csv"); }
+        try {
+          const b = await api("/v1/nlp/corpora/prelabel", { method: "POST", body: fd, blob: true });
+          const removed = ((await b.text()).match(/identifiers removed:/g) || []).length;
+          saveBlob(b, "cnr-nlp-prelabel.csv");
+          done.textContent = removed ? "Done. Identifiers were removed from " + removed + " line(s) and replaced by placeholders such as [PHONE]. Look for \"identifiers removed\" in the notes column and check those sentences." : "Done. No identifiers were found.";
+        }
         catch (e) { err.textContent = e.message; }
       } }, "Download pre-labelled CSV");
-      out.push(h("p", null, "Pre-label: upload plain sentences or a document (Word, PDF with selectable text, PowerPoint, OpenDocument, HTML, Markdown) and get back a CSV holding the rule engine's guesses for speakers to correct. The corrected file uploads as it is. Nothing is stored, and a file with identifiers is refused whole."),
+      out.push(h("p", null, "Pre-label: upload plain sentences or a document (Word, PDF with selectable text, PowerPoint, OpenDocument, HTML, Markdown) and get back a CSV holding the rule engine's guesses for speakers to correct. Identifiers (titled names, phone numbers, emails, record or ID numbers) are removed for you and replaced by placeholders such as [PHONE]. Choose English and Chichewa if the text has both. The corrected file uploads as it is. Nothing is stored."),
         h("div", { class: "form3" }, field("Text file or document (.txt .csv .docx .pdf .pptx .odt .html .md)", file, "pl-file"), field("Language", lang, "pl-lang")), pre);
     }
-    return h("div", { class: "card" }, h("h3", null, "Annotation tools"), ...out, err);
+    return h("div", { class: "card" }, h("h3", null, "Annotation tools"), ...out, err, done);
   }
 
   function listOf(items, total) {

@@ -5,6 +5,7 @@ import io
 import zipfile
 
 import pytest
+from app import nlp_lab
 
 from app import nlp_extract as X
 from app import nlp_prelabel
@@ -118,9 +119,12 @@ def test_prelabel_reads_a_document_and_returns_the_corpus_csv():
     assert res["report"]["documents"] == 2
 
 
-def test_prelabel_refuses_identifiers_inside_a_document():
-    with pytest.raises(nlp_prelabel.PrelabelError, match="Identifiers were found"):
-        nlp_prelabel.prelabel(docx(["Call the mother on 0999 123 456 about the child."]), "n.docx")
+def test_prelabel_removes_identifiers_inside_a_document():
+    res = nlp_prelabel.prelabel(docx(["Call the mother on 0999 123 456 about the child.", "The child ate rice."]), "n.docx")
+    rows = list(csv.DictReader(io.StringIO(res["csv"])))
+    assert "0999" not in res["csv"] and "[PHONE]" in rows[0]["text"] and "identifiers removed: PHONE" in rows[0]["notes"]
+    assert res["report"]["identifier_lines_removed"] == 1 and res["report"]["identifier_types_removed"] == {"PHONE": 1}
+    assert nlp_lab.screen_identifiers(rows[0]["text"]) == []
 
 
 def test_prelabel_txt_and_csv_behave_as_before():

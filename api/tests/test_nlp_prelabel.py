@@ -71,10 +71,20 @@ def test_csv_input_keeps_doc_ids():
     assert out[0]["doc_id"] == "A1"
 
 
-def test_identifiers_refuse_the_whole_file_without_echoing_text():
-    with pytest.raises(nlp_prelabel.PrelabelError) as e:
-        nlp_prelabel.prelabel(b"The child ate rice.\nSeen by Dr Banda today.\n", "s.txt")
-    assert "line-2" in str(e.value) and "Banda" not in str(e.value)
+def test_identifiers_are_removed_not_refused_and_never_written():
+    res = nlp_prelabel.prelabel(b"The child ate rice.\nSeen by Dr Banda today, phone 0999123456, mail a.b@x.org, MRN: AB12345.\n", "s.txt")
+    out = rows(res["csv"])
+    assert len(out) == 2 and "Banda" not in res["csv"] and "0999123456" not in res["csv"] and "a.b@x.org" not in res["csv"] and "AB12345" not in res["csv"]
+    assert "[NAME]" in out[1]["text"] and "identifiers removed" in out[1]["notes"] and "identifiers removed" not in out[0]["notes"]
+    assert res["report"]["identifier_lines_removed"] == 1 and res["report"]["lines_dropped"] == 0
+    assert "Banda" not in str(res["report"])
+
+
+def test_language_pair_assigns_each_sentence():
+    out = rows(nlp_prelabel.prelabel(b"The child ate rice and beans.\nMwana ali ndi kutupa.\n", "s.txt", lang="en+ny")["csv"])
+    assert [r["lang"] for r in out] == ["en", "ny"]
+    with pytest.raises(nlp_prelabel.PrelabelError):
+        nlp_prelabel.prelabel(b"Some text here.\n", "s.txt", lang="en+xx")
 
 
 def test_bad_inputs():
@@ -90,8 +100,11 @@ def test_endpoints(client):
     r = client.post("/v1/nlp/corpora/prelabel", files={"file": ("s.txt", SENTENCES.encode(), "text/plain")}, data={"lang": "en"}, headers=ADMIN)
     assert r.status_code == 200 and r.headers["x-prelabel-documents"] == "4" and "rice|FOOD" in r.text
     assert client.post("/v1/nlp/corpora/prelabel", files={"file": ("s.txt", b"x", "text/plain")}, data={"lang": "xx"}, headers=ADMIN).status_code == 422
-    bad = client.post("/v1/nlp/corpora/prelabel", files={"file": ("s.txt", b"Call 0999123456 now.\n", "text/plain")}, headers=ADMIN)
-    assert bad.status_code == 422 and "0999123456" not in bad.text
+    ok = client.post("/v1/nlp/corpora/prelabel", files={"file": ("s.txt", b"Call 0999123456 now.\nMr Banda ate rice.\n", "text/plain")}, headers=ADMIN)
+    assert ok.status_code == 200 and "0999123456" not in ok.text and "Banda" not in ok.text and ok.headers["x-prelabel-identifiers-removed"] == "2"
+    pair = client.post("/v1/nlp/corpora/prelabel", files={"file": ("s.txt", b"The child ate rice and beans.\nMwana ali ndi kutupa.\n", "text/plain")}, data={"lang": "en+ny"}, headers=ADMIN)
+    assert pair.status_code == 200 and ",en," in pair.text and ",ny," in pair.text
+    assert client.post("/v1/nlp/corpora/prelabel", files={"file": ("s.txt", b"x", "text/plain")}, data={"lang": "en+xx"}, headers=ADMIN).status_code == 422
 
 
 def test_prelabel_needs_run_nlp(client):

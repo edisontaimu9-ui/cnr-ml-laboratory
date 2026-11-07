@@ -15,8 +15,8 @@ LANG_CODES = {"en", "ny", "tum", "yao", "mixed"}
 TRAIN_LABELS = {k for k in lx.LABELS if k != "PHI"}          # PHI is detected and refused, never a training label
 MAX_DOCS = 50_000
 MAX_ERRORS_SHOWN = 25
-MIN_EXAMPLES_PER_LABEL = 50                                   # below this a trained model is not trustworthy (a warning, not a refusal)
-MIN_DOCS_PER_LANG = 100
+MIN_EXAMPLES_PER_LABEL = 20                                   # below this a trained model is not trustworthy (a warning, not a refusal)
+MIN_DOCS_PER_LANG = 50
 
 
 class CorpusError(ValueError):

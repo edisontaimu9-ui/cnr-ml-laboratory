@@ -6,10 +6,16 @@ split into sentences by `nlp_extract`), runs the rule-based engine on each, and 
 one-row-per-document corpus format (`text`, `lang`, `entities` as `surface|LABEL; surface|LABEL`). After correction the same file can
 be uploaded to /v1/nlp/corpora as it is: extra columns are ignored and never stored.
 
-The guesses are only guesses. Texts are processed in memory and not stored. A file with identifiers is refused whole, in line with
-corpus upload, and the refusal names line numbers and identifier types only, never the text."""
+The guesses are only guesses. Texts are processed in memory and not stored. Identifiers (titled names, phones, e-mails, record
+and ID numbers) are removed by the tool itself: each one is replaced by a placeholder such as [PHONE] before anything is guessed or
+written, and the notes column and the report name the line and the identifier type only, never the text. Corpus upload still refuses
+a file that holds identifiers, so the CSV that leaves this tool is safe to upload.
+
+`lang` may be a single code (en, ny, tum, yao, mixed) or a pair joined by `+`, for example `en+ny`: each sentence is then assigned to
+one of the two by the engine's evidence."""
 import csv
 import io
+import re
 from collections import Counter
 
 from . import nlp_corpus, nlp_extract, nlp_formats, nlp_lab
@@ -86,41 +92,93 @@ def _guess_entities(text: str, ents: list[dict]) -> tuple[str, list[str]]:
     return "; ".join(f"{s}|{lab}" for s, lab in kept), notes
 
 
+_PLACEHOLDER = re.compile(r"\[[A-Z_]+\]")
+
+
+def parse_lang(lang: str | None) -> tuple[str | None, tuple[str, ...]]:
+    """Returns (single code or None, allowed codes for a pair). Raises PrelabelError for an unknown code."""
+    lang = (lang or "").strip().lower()
+    if not lang:
+        return None, ()
+    parts = tuple(dict.fromkeys(p.strip() for p in lang.split("+") if p.strip()))
+    bad = [p for p in parts if p not in nlp_corpus.LANG_CODES]
+    if bad or not parts or len(parts) > 3:
+        raise PrelabelError("lang must be one of " + ", ".join(sorted(nlp_corpus.LANG_CODES)) + ", or a pair such as en+ny")
+    return (parts[0], ()) if len(parts) == 1 else (None, parts)
+
+
+def _redact(text: str) -> tuple[str, Counter]:
+    """Replaces identifiers with [TYPE] placeholders. Repeats until none are left (a placeholder never matches a detector)."""
+    types: Counter = Counter()
+    for _ in range(3):
+        phi = nlp_lab.screen_identifiers(text)
+        if not phi:
+            return text, types
+        types.update(e["norm"] for e in phi)
+        text = nlp_lab.mask_identifiers(nlp_lab._fold(text), phi)
+    return (text, types) if not nlp_lab.screen_identifiers(text) else ("", types)
+
+
+def _pick_lang(a: dict, single: str | None, pair: tuple[str, ...]) -> tuple[str, str | None]:
+    """Returns (code, note)."""
+    if single:
+        return single, None
+    guessed = a["language"]["overall"]
+    if pair:
+        if guessed in pair:
+            return guessed, None
+        ev = {d["language"]: d["evidence"] for d in a["language"]["detected"]}
+        best = max(pair, key=lambda c: ev.get(c, 0))
+        if ev.get(best, 0) > 0:
+            return best, "language mix detected: check lang" if guessed == "mixed" else None
+        return "", f"language could not be guessed: fill in lang ({' or '.join(pair)})"
+    use = guessed if guessed in nlp_corpus.LANG_CODES else ""
+    if not use:
+        return "", "language could not be guessed: fill in lang (en, ny, tum, yao or mixed)"
+    return use, "language mix detected: check lang" if a["language"]["code_switching"] else None
+
+
 def prelabel(raw: bytes, filename: str = "", lang: str | None = None) -> dict:
-    """Returns {csv, report}. Raises PrelabelError for an unreadable file or when identifiers are found."""
+    """Returns {csv, report}. Identifiers are removed (replaced by placeholders) before anything else happens. Raises PrelabelError
+    for an unreadable file or an unknown language."""
+    single, pair = parse_lang(lang)
     sentences = read_sentences(raw, filename)
-    id_lines, id_types = [], Counter()
+    red_lines, red_types, dropped = [], Counter(), []
     analysed = []
     for doc_id, text in sentences:
         if len(text) > nlp_lab.MAX_TEXT_CHARS:
             raise PrelabelError(f"{doc_id}: text is longer than {nlp_lab.MAX_TEXT_CHARS} characters.")
-        a = nlp_lab.analyze(text)
-        if a["identifiers"]["found"]:
-            id_lines.append(doc_id)
-            id_types.update(a["identifiers"]["types"])
-        analysed.append((doc_id, text, a))
-    if id_lines:
-        raise PrelabelError("Identifiers were found, so nothing was exported. Remove them at the source and upload again. "
-                            f"Lines: {', '.join(id_lines[:25])}{' ...' if len(id_lines) > 25 else ''}. Types: {dict(id_types)}.")
+        clean, types = _redact(text)
+        if types:
+            red_lines.append(doc_id)
+            red_types.update(types)
+        if not clean.strip():
+            dropped.append(doc_id)
+            continue
+        a = nlp_lab.analyze(clean)
+        lang_a = nlp_lab.analyze(_PLACEHOLDER.sub(" ", clean)) if types and (not single) else a
+        analysed.append((doc_id, clean, a, lang_a, dict(types)))
+    if not analysed:
+        raise PrelabelError("Nothing was left after identifiers were removed.")
     out = io.StringIO(newline="")
     w = csv.writer(out, lineterminator="\n")
     w.writerow(COLUMNS)
     langs, with_ents, total_ents = Counter(), 0, 0
-    for doc_id, text, a in analysed:
-        guessed = a["language"]["overall"]
-        use = lang or (guessed if guessed in nlp_corpus.LANG_CODES else "")
+    for doc_id, text, a, lang_a, types in analysed:
+        use, lnote = _pick_lang(lang_a, single, pair)
         cell, notes = _guess_entities(text, a["entities"])
-        if not use:
-            notes.append("language could not be guessed: fill in lang (en, ny, tum, yao or mixed)")
-        elif not lang and a["language"]["code_switching"]:
-            notes.append("language mix detected: check lang")
+        if types:
+            notes.insert(0, "identifiers removed: " + ", ".join(sorted(types)) + " (check the sentence still reads correctly)")
+        if lnote:
+            notes.append(lnote)
         langs[use or "unset"] += 1
         n = cell.count("|")
         with_ents += bool(n)
         total_ents += n
         w.writerow([doc_id, use, text, cell, "", " | ".join(notes)])
     report = {"engine": nlp_lab.ENGINE_VERSION, "documents": len(analysed), "with_guesses": with_ents, "guessed_entities": total_ents,
-              "by_language": dict(langs)}
+              "by_language": dict(langs), "identifier_lines_removed": len(red_lines), "identifier_types_removed": dict(red_types),
+              "lines_dropped": len(dropped)}
     return {"csv": out.getvalue(), "report": report}
 
 

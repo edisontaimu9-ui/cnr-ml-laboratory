@@ -72,7 +72,7 @@ def train(client, cid, seed=1, trial=False):
 
 
 def test_lifecycle_per_language_approval_and_separation(client):
-    cid = upload_corpus(client, synthetic(120, 60), "stage3-corpus")
+    cid = upload_corpus(client, synthetic(120, 30), "stage3-corpus")
     run1, run2 = train(client, cid, 1), train(client, cid, 2)
     ds, rev = key(client, "ds-nlp-model", "data_scientist"), key(client, "rev-nlp-model", "clinical_reviewer")
     viewer = key(client, "viewer-nlp-model", "viewer")
@@ -141,7 +141,7 @@ def test_tampered_model_file_is_not_approved(client):
     from app import storage
     from app.db import SessionLocal
     from app.models import NlpModelVersion
-    cid = upload_corpus(client, synthetic(120, 60), "stage3-tamper")
+    cid = upload_corpus(client, synthetic(120, 30), "stage3-tamper")
     run = train(client, cid)
     ds, rev = key(client, "ds-nlp-tamper", "data_scientist"), key(client, "rev-nlp-tamper", "clinical_reviewer")
     v = client.post("/v1/nlp/models", json={"training_run_id": run, "name": "nlp-ner-tamper", "intended_use": USE}, headers=ds).json()
