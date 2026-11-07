@@ -138,6 +138,8 @@ def test_permissions_and_preview(client, ds):
 
 def test_audit_has_no_row_content(client):
     log = client.get("/v1/audit?limit=200", headers=ADMIN).text
+    import re
+    log = re.sub(r'"ts":"[^"]*"', "", log)  # timestamps can contain digits like 0999 by chance
     assert "dataset.version_created" in log and "Person 1" not in log and "0999" not in log
 
 
