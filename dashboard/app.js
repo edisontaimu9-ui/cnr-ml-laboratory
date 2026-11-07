@@ -299,6 +299,7 @@
           stat("Baseline macro F1", n3(b.macro_f1), b.strategy), stat("Balanced accuracy", pct(t.balanced_accuracy)), stat("Accuracy", pct(t.accuracy)), stat("ROC AUC", n3(t.roc_auc))),
         h("p", { class: "muted" }, "Baselines: always the most common class " + n3(b.majority_macro_f1) + ", guessing by class frequency " + n3(b.chance_macro_f1) + ". The model has to beat the higher one, with its 95% range clear of it."),
         h("p", { class: "muted" }, "Cross-validation on the training part (" + cv.folds + " folds): macro F1 " + n3(cv.macro_f1_mean) + " ± " + n3(cv.macro_f1_sd) + ", balanced accuracy " + n3(cv.balanced_accuracy_mean) + " ± " + n3(cv.balanced_accuracy_sd) + "."));
+      out.push(h("h2", null, "Model against baseline"), perfChart(m), cvChart(m));
       out.push(h("h2", null, "Per class"), perClassChart(m.per_class), table(["Class", "Precision", "Recall", "F1", "Test cases"], Object.entries(m.per_class || {}).map(([k, v]) => [k, v.precision, v.recall, v.f1, v.support])));
       const cm = m.confusion_matrix || { labels: [], matrix: [] };
       out.push(h("h2", null, "Confusion matrix"), h("p", { class: "muted" }, "Rows are the true class, columns the predicted class."),
@@ -308,6 +309,7 @@
         h("div", { class: "stats" }, stat("R²", n3(t.r2), "baseline " + n3(b.r2)), stat("RMSE", n3(t.rmse), "95% range " + n3(t.rmse_ci95 && t.rmse_ci95[0]) + "–" + n3(t.rmse_ci95 && t.rmse_ci95[1])),
           stat("Baseline RMSE", n3(b.rmse), b.strategy), stat("MAE", n3(t.mae))),
         h("p", { class: "muted" }, "Cross-validation (" + cv.folds + " folds): R² " + n3(cv.r2_mean) + " ± " + n3(cv.r2_sd) + ", RMSE " + n3(cv.rmse_mean) + " ± " + n3(cv.rmse_sd) + "."));
+      out.push(h("h2", null, "Model against baseline"), perfChart(m), cvChart(m));
     }
     const cp = m.comparison;
     if (cp) {
@@ -1065,6 +1067,7 @@
     else out.push(h("div", { class: "stats" }, m.task === "classification"
       ? [stat("Macro F1", n3(t.macro_f1), "95% range " + n3(t.macro_f1_ci95 && t.macro_f1_ci95[0]) + "–" + n3(t.macro_f1_ci95 && t.macro_f1_ci95[1])), stat("Baseline macro F1", n3(b.macro_f1)), stat("Balanced accuracy", pct(t.balanced_accuracy)), stat("Test rows", m.n_test)]
       : [stat("R²", n3(t.r2), "baseline " + n3(b.r2)), stat("RMSE", n3(t.rmse)), stat("Test rows", m.n_test)]));
+    if (!isMatch && t && Object.keys(t).length) out.push(perfChart(m), m.task === "classification" ? perClassChart(m.per_class) : null);
     if (!isMatch) out.push(h("p", null, h("button", { class: "link", onclick: () => { location.hash = "experiments/" + v.experiment_id; } }, "Open the full experiment report")));
 
     // actions
@@ -2324,6 +2327,11 @@
   const nlpF1Chart = (labels, model, rules) => labels.length ? barChart(labels, [{ name: "Model F1", color: "#0e5a73", values: model }, { name: "Rules F1", color: "#8a9ba2", values: rules }], "Higher is better. Compare the model with the rules baseline on the test documents.") : null;
   const perClassChart = (pc) => { const k = Object.keys(pc || {}); return k.length ? barChart(k, [{ name: "Precision", color: "#8a9ba2", values: k.map((x) => pc[x].precision) }, { name: "Recall", color: "#c0392b", values: k.map((x) => pc[x].recall) }, { name: "F1", color: "#0e5a73", values: k.map((x) => pc[x].f1) }], "Per-class precision, recall and F1 on the hold-out test.") : null; };
 
+  const perfChart = (m) => { const t = m.test || {}, b = m.baseline || {};
+    const cls = m.task === "classification", L = cls ? ["Macro F1", "Balanced accuracy", "Accuracy", "ROC AUC"] : ["R²"], k = cls ? ["macro_f1", "balanced_accuracy", "accuracy", "roc_auc"] : ["r2"];
+    return barChart(L, [{ name: "Baseline", color: "#8a9ba2", values: k.map((x) => b[x]) }, { name: "Model", color: "#0e5a73", values: k.map((x) => t[x]) }], "Hold-out test, model against the trivial baseline. The model should clear the baseline by a clear margin. Bars start at 0 and stop at 100%."); };
+  function cvChart(m) { const cv = m.cv || {}, cls = m.task === "classification", a = cls ? cv.macro_f1_mean : cv.r2_mean, sd = cls ? cv.macro_f1_sd : cv.r2_sd, t = (m.test || {})[cls ? "macro_f1" : "r2"];
+    return a == null || t == null ? null : h("p", { class: "muted" }, (cls ? "Macro F1" : "R²") + ": cross-validation " + n3(a) + " ± " + n3(sd) + " versus hold-out " + n3(t) + ". A hold-out far below cross-validation suggests the model does not generalise."); }
   function barChart(labels, series, caption) {
     const NS = "http://www.w3.org/2000/svg", W = 560, rowH = 20 + series.length * 14, pl = 150, pr = 44, H = 12 + labels.length * rowH;
     const el = (tag, attrs) => { const e = document.createElementNS(NS, tag); for (const [a, v] of Object.entries(attrs || {})) e.setAttribute(a, v); return e; };
