@@ -240,9 +240,10 @@ class NlpTrainingRun(Base):
 class NlpModelVersion(Base):
     """A registered, immutable copy of a trained NLP model plus its review trail (NLP lab stage 3).
 
-    Status: candidate -> in_review -> approved | rejected; approved -> retired. Approval is per language: `approved_languages_json`
-    lists the languages a reviewer signed off, and a language that was not evaluated on held-out text can never be on it.
-    There is no deploy step and nothing serves this model yet; approval only records that people reviewed it."""
+    Status: candidate -> in_review -> approved | rejected; approved -> deployed -> retired. Approval is per language:
+    `approved_languages_json` lists the languages a reviewer signed off, and a language that was not evaluated on held-out text can never
+    be on it. "deployed" means designated as the version to serve for its name (one per name); only a deployed version is ever loaded
+    by the serving endpoints, and only for the languages it was approved for."""
     __tablename__ = "mlab_nlp_model_versions"
     __table_args__ = (UniqueConstraint("name", "version"), UniqueConstraint("training_run_id"))
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -272,6 +273,8 @@ class NlpModelVersion(Base):
     retired_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     retired_reason: Mapped[str | None] = mapped_column(String(300), nullable=True)
     history_json: Mapped[list] = mapped_column(JSON, default=list)
+    deployed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    deployed_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
 
 
 # ---------------------------------------------------------------- LLM phase 3: RAG evaluation laboratory

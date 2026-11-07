@@ -1,12 +1,12 @@
 """NLP model registry and review gate (stage 3).
 
-Lifecycle:  candidate -> in_review -> approved | rejected;  approved -> retired.
+Lifecycle:  candidate -> in_review -> approved | rejected;  approved -> deployed -> retired.
 
 Only a completed, non-trial training run can be registered. Registration copies the model file and freezes the evaluation. Approval is
 per language (see nlp_registry), needs a validation reference and written notes, and must be done by someone other than the person who
-registered or submitted the model. There is no deploy step: nothing serves an NLP model yet, so "approved" records that people reviewed
-it and for which languages, nothing more. The registry never loads a model file; it only copies, hashes and compares bytes. The audit
-log keeps ids and counts only."""
+registered or submitted the model. Deploying (an administrator's decision, one version per name) designates the version the serving
+endpoints load (`/v1/nlp/serving`); rollback returns to the version it replaced, and retiring withdraws it. The registry itself never
+loads a model file; it only copies, hashes and compares bytes. The audit log keeps ids and counts only."""
 import hashlib
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -15,7 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from .. import audit, nlp_registry, storage
+from .. import audit, nlp_registry, nlp_serving, storage
 from ..config import get_settings
 from ..db import get_db
 from ..models import NlpCorpusVersion, NlpModelVersion, NlpTrainingRun, utcnow
@@ -23,7 +23,7 @@ from ..security import Principal, require
 
 router = APIRouter(prefix="/v1/nlp/models", tags=["nlp"])
 NOTICE = ("Approval records that a reviewer read the evaluation and accepted the model for the languages listed. It does not make the model "
-          "clinically validated, and nothing serves it yet.")
+          "clinically validated. Only a deployed version is served, and only for its approved languages.")
 
 
 class RegisterBody(BaseModel):
@@ -51,12 +51,17 @@ class RetireBody(BaseModel):
     reason: str = Field(min_length=10, max_length=300)
 
 
+class DeployBody(BaseModel):
+    note: str = Field(default="", max_length=500)
+
+
 def _out(v: NlpModelVersion, detail: bool = False) -> dict:
     m = v.metrics_json or {}
     base = {"id": v.id, "name": v.name, "version": v.version, "status": v.status, "training_run_id": v.training_run_id,
             "headline": nlp_registry.headline(m), "approved_languages": v.approved_languages_json or [], "created_by": v.created_by,
             "created_at": v.created_at.isoformat() + "Z", "submitted_at": v.submitted_at.isoformat() + "Z" if v.submitted_at else None,
-            "reviewed_at": v.reviewed_at.isoformat() + "Z" if v.reviewed_at else None, "approved_by": v.approved_by}
+            "reviewed_at": v.reviewed_at.isoformat() + "Z" if v.reviewed_at else None, "approved_by": v.approved_by,
+            "deployed_at": v.deployed_at.isoformat() + "Z" if v.deployed_at else None, "deployed_by": v.deployed_by}
     if detail:
         base.update(intended_use=v.intended_use, clinical_validation_ref=v.clinical_validation_ref, review_notes=v.review_notes,
                     warnings_acknowledged=bool(v.warnings_acknowledged), submitted_by=v.submitted_by,
@@ -195,9 +200,58 @@ def reject(vid: int, body: RejectBody, request: Request, p: Principal = Depends(
 @router.post("/{vid}/retire")
 def retire(vid: int, body: RetireBody, request: Request, p: Principal = Depends(require("approve:models")), db: Session = Depends(get_db)):
     v = _get(db, vid)
-    _need(v, "approved")
+    _need(v, "approved", "deployed")
+    was_live = v.status == "deployed"
     v.status, v.retired_at, v.retired_reason = "retired", utcnow(), "withdrawn: " + body.reason.strip()
     _log(v, "retired", p.name, body.reason)
     db.commit()
-    audit.record(db, "nlp.model_retired", principal=p, request=request, resource_type="nlp_model_version", resource_id=v.id)
+    nlp_serving.clear_cache()
+    audit.record(db, "nlp.model_retired", principal=p, request=request, resource_type="nlp_model_version", resource_id=v.id, detail={"was_deployed": was_live})
     return _out(v, detail=True)
+
+
+def _deploy(db: Session, v: NlpModelVersion, p: Principal, request: Request, note: str, action: str) -> int | None:
+    """Makes `v` the one served version for its name; the version it replaces is retired as 'superseded' (rollback can bring it back)."""
+    _verify_artifact(v)
+    replaced = None
+    for other in db.scalars(select(NlpModelVersion).where(NlpModelVersion.name == v.name, NlpModelVersion.status == "deployed", NlpModelVersion.id != v.id)):
+        other.status, other.retired_at, other.retired_reason = "retired", utcnow(), "superseded"
+        _log(other, "superseded by version " + str(v.version), p.name)
+        replaced = other.version
+    v.status, v.deployed_at, v.deployed_by, v.retired_at, v.retired_reason = "deployed", utcnow(), p.name, None, None
+    _log(v, action, p.name, note)
+    db.commit()
+    nlp_serving.clear_cache()
+    audit.record(db, "nlp.model_" + action, principal=p, request=request, resource_type="nlp_model_version", resource_id=v.id,
+                 detail={"name": v.name, "version": v.version, "replaced_version": replaced, "languages": v.approved_languages_json})
+    return replaced
+
+
+@router.post("/{vid}/deploy")
+def deploy(vid: int, body: DeployBody, request: Request, p: Principal = Depends(require("deploy:models")), db: Session = Depends(get_db)):
+    """Designates an approved version as the one to serve. Needs at least one approved language; checks the model file's hash again."""
+    v = _get(db, vid)
+    if v.status == "retired" and (v.retired_reason or "").startswith("withdrawn"):
+        raise HTTPException(409, "A version that was withdrawn cannot be redeployed. Register and review a new one.")
+    _need(v, "approved")
+    if not (v.approved_languages_json or []):
+        raise HTTPException(409, "No language is approved for this version, so there is nothing it may serve.")
+    _deploy(db, v, p, request, body.note, "deployed")
+    return _out(v, detail=True)
+
+
+@router.post("/by-name/{name}/rollback")
+def rollback(name: str, body: DeployBody, request: Request, p: Principal = Depends(require("deploy:models")), db: Session = Depends(get_db)):
+    """Returns to the version that the deployed one replaced."""
+    cur = db.scalar(select(NlpModelVersion).where(NlpModelVersion.name == name, NlpModelVersion.status == "deployed"))
+    if cur is None:
+        raise HTTPException(409, "Nothing is deployed under this name, so there is nothing to roll back.")
+    prev = db.scalars(select(NlpModelVersion).where(NlpModelVersion.name == name, NlpModelVersion.status == "retired", NlpModelVersion.retired_reason == "superseded",
+                                                    NlpModelVersion.deployed_at.is_not(None)).order_by(NlpModelVersion.deployed_at.desc()).limit(1)).first()
+    if prev is None:
+        raise HTTPException(409, "There is no earlier deployed version to go back to. Use Retire to withdraw this one.")
+    cur.status, cur.retired_at, cur.retired_reason = "retired", utcnow(), "withdrawn: rolled back"
+    _log(cur, "rolled back", p.name, body.note)
+    db.flush()                                              # sessions here do not autoflush: the replaced version must not be seen as deployed
+    _deploy(db, prev, p, request, body.note or f"rolled back from version {cur.version}", "rollback")
+    return _out(prev, detail=True)

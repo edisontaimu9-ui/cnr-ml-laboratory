@@ -3,7 +3,7 @@
 Speakers and clinicians correct guesses faster than they write annotations from nothing. `prelabel` reads plain sentences (a .txt file
 with one sentence per line, or a CSV with a `text` column) or a document (.docx, .pptx, .odt, .pdf with selectable text, .html, .md,
 split into sentences by `nlp_extract`), runs the rule-based engine on each, and returns a CSV in the
-one-row-per-document corpus format (`text`, `lang`, `entities` as `surface|LABEL; surface|LABEL`). After correction the same file can
+one-row-per-document corpus format (`text`, `lang`, an optional `category`, `entities` as `surface|LABEL; surface|LABEL`). After correction the same file can
 be uploaded to /v1/nlp/corpora as it is: extra columns are ignored and never stored.
 
 The guesses are only guesses. Texts are processed in memory and not stored. Identifiers (titled names, phones, e-mails, record
@@ -21,7 +21,7 @@ from collections import Counter
 from . import nlp_corpus, nlp_extract, nlp_formats, nlp_lab
 
 MAX_LINES = 5000
-COLUMNS = ["doc_id", "lang", "text", "entities", "reviewed", "notes"]
+COLUMNS = ["doc_id", "lang", "category", "text", "entities", "reviewed", "notes"]
 
 
 class PrelabelError(ValueError):
@@ -175,7 +175,8 @@ def prelabel(raw: bytes, filename: str = "", lang: str | None = None) -> dict:
         n = cell.count("|")
         with_ents += bool(n)
         total_ents += n
-        w.writerow([doc_id, use, text, cell, "", " | ".join(notes)])
+        cat = a["classification"]["document_type"]["label"]
+        w.writerow([doc_id, use, "" if cat == "unclear" else cat, text, cell, "", " | ".join(notes)])
     report = {"engine": nlp_lab.ENGINE_VERSION, "documents": len(analysed), "with_guesses": with_ents, "guessed_entities": total_ents,
               "by_language": dict(langs), "identifier_lines_removed": len(red_lines), "identifier_types_removed": dict(red_types),
               "lines_dropped": len(dropped)}
@@ -186,10 +187,10 @@ def prelabel(raw: bytes, filename: str = "", lang: str | None = None) -> dict:
 # Example rows only. Chichewa and English are written by the developers; the Tumbuka row uses only terms already in the starter list
 # (unreviewed); there is no Yao example sentence because nobody who speaks Yao has supplied one. Every example is for deleting.
 _TEMPLATE_ROWS = [
-    ["example-en", "en", "The child ate rice and beans.", "child|POPULATION; rice|FOOD; beans|FOOD", "", "EXAMPLE: delete this row"],
-    ["example-ny", "ny", "Mwana ali ndi kutupa.", "Mwana|POPULATION; kutupa|SYMPTOM", "", "EXAMPLE: delete this row"],
-    ["example-tum", "tum", "Ŵana wakulya somba.", "Ŵana|POPULATION; somba|FOOD", "", "EXAMPLE: delete this row (Tumbuka terms are unreviewed)"],
-    ["example-yao", "yao", "<<replace with a real Yao sentence>>", "", "", "EXAMPLE: a Yao speaker must supply the sentence and its terms"],
+    ["example-en", "en", "dietary_record", "The child ate rice and beans.", "child|POPULATION; rice|FOOD; beans|FOOD", "", "EXAMPLE: delete this row"],
+    ["example-ny", "ny", "clinical_note", "Mwana ali ndi kutupa.", "Mwana|POPULATION; kutupa|SYMPTOM", "", "EXAMPLE: delete this row"],
+    ["example-tum", "tum", "dietary_record", "Ŵana wakulya somba.", "Ŵana|POPULATION; somba|FOOD", "", "EXAMPLE: delete this row (Tumbuka terms are unreviewed)"],
+    ["example-yao", "yao", "", "<<replace with a real Yao sentence>>", "", "", "EXAMPLE: a Yao speaker must supply the sentence and its terms"],
 ]
 
 

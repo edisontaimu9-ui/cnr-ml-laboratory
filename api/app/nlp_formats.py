@@ -135,7 +135,7 @@ def _csv(raw: bytes, lang):
         for r, n in norm:
             key = r.get("doc_id") or r["text"]
             if key not in docs:
-                docs[key] = {"row": n, "text": r["text"], "lang": r.get("lang") or None, "entities": [], "err": None}
+                docs[key] = {"row": n, "text": r["text"], "lang": r.get("lang") or None, "category": r.get("category") or None, "entities": [], "err": None}
                 order.append(key)
             d = docs[key]
             if d["text"] != r["text"] and not d["err"]:
@@ -151,7 +151,7 @@ def _csv(raw: bytes, lang):
             if d["err"]:
                 out.append((f"row {d['err'][0]}", None, d["err"][1]))
             else:
-                out.append((f"row {d['row']}", {"text": d["text"], "lang": d["lang"], "entities": d["entities"]}, None))
+                out.append((f"row {d['row']}", {"text": d["text"], "lang": d["lang"], "category": d["category"], "entities": d["entities"]}, None))
     elif "entities" in head:                                                # one row per document: "surface|LABEL; surface|LABEL"
         for r, n in norm:
             ents, err = [], None
@@ -165,11 +165,11 @@ def _csv(raw: bytes, lang):
                     err = f'"{surface.strip()[:30]}" was not found in the text'
                     break
                 ents += [{"start": s, "end": e, "label": label.strip()} for s, e in spans]
-            out.append((f"row {n}", None if err else {"text": r["text"], "lang": r.get("lang") or None, "entities": ents}, err))
+            out.append((f"row {n}", None if err else {"text": r["text"], "lang": r.get("lang") or None, "category": r.get("category") or None, "entities": ents}, err))
         notes.append("Entities were found by matching each listed word in the text as a whole word, every time it appears.")
     else:
         notes.append("The CSV has no entity columns (start, end, label or entities), so its documents have no entities.")
-        out = [(f"row {n}", {"text": r["text"], "lang": r.get("lang") or None, "entities": []}, None) for r, n in norm]
+        out = [(f"row {n}", {"text": r["text"], "lang": r.get("lang") or None, "category": r.get("category") or None, "entities": []}, None) for r, n in norm]
     return out, notes
 
 

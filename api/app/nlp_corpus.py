@@ -2,7 +2,7 @@
 
 Many input formats are accepted (see nlp_formats: JSONL, JSON, CSV, BIO/IOB2, CoNLL, spaCy DocBin, BRAT standoff). All are converted
 to one canonical document: {"text": ..., "lang": "ny", "entities": [{"start": 0, "end": 5, "label": "POPULATION"}]}, with character
-offsets (end exclusive). Only `text`, `lang` and `entities` are kept; any other field is dropped so stray identifiers in extra
+offsets (end exclusive). Only `text`, `lang`, `entities` and an optional `category` (the document type, used to train a text classifier) are kept; any other field is dropped so stray identifiers in extra
 columns never reach storage. A file that contains identifiers or any invalid record is refused as a whole, and the report names
 record locations and identifier types only, never the text."""
 import hashlib
@@ -13,6 +13,7 @@ from . import nlp_formats, nlp_lab, nlp_lexicon as lx
 
 LANG_CODES = {"en", "ny", "tum", "yao", "mixed"}
 TRAIN_LABELS = {k for k in lx.LABELS if k != "PHI"}          # PHI is detected and refused, never a training label
+CATEGORIES = {"clinical_note", "lab_report", "dietary_record", "research_text", "other"}   # optional document type, for the text classifier
 MAX_DOCS = 50_000
 MAX_ERRORS_SHOWN = 25
 MIN_EXAMPLES_PER_LABEL = 20                                   # below this a trained model is not trustworthy (a warning, not a refusal)
@@ -62,12 +63,12 @@ def _check_entities(text: str, ents, where: str, errors: list[str], label_map: d
 
 
 def _doc_parts(obj, default_lang):
-    """Text, language and entity list from a canonical document, a doccano-style document (label/labels) or a spaCy pair."""
+    """Text, language, entity list and category from a canonical document, a doccano-style document (label/labels) or a spaCy pair."""
     if isinstance(obj, (list, tuple)) and len(obj) == 2 and isinstance(obj[0], str) and isinstance(obj[1], dict):
-        return obj[0], obj[1].get("lang") or default_lang, obj[1].get("entities", [])
+        return obj[0], obj[1].get("lang") or default_lang, obj[1].get("entities", []), obj[1].get("category")
     if isinstance(obj, dict) and isinstance(obj.get("text"), str):
         ents = next((obj[k] for k in ("entities", "label", "labels") if k in obj), [])
-        return obj["text"], obj.get("lang") or default_lang, ents
+        return obj["text"], obj.get("lang") or default_lang, ents, obj.get("category")
     return None
 
 
@@ -97,7 +98,11 @@ def parse(raw: bytes, *, filename: str = "", fmt: str = "auto", lang: str | None
         if parts is None:
             errors.append(f"{where}: needs a text string")
             continue
-        text, dlang, raw_ents = parts
+        text, dlang, raw_ents, cat = parts
+        cat = str(cat).strip().lower() if cat not in (None, "") else None
+        if cat is not None and cat not in CATEGORIES:
+            errors.append(f"{where}: category must be one of " + ", ".join(sorted(CATEGORIES)))
+            continue
         if not text.strip() or len(text) > nlp_lab.MAX_TEXT_CHARS:
             errors.append(f"{where}: text is empty or longer than {nlp_lab.MAX_TEXT_CHARS} characters")
             continue
@@ -118,9 +123,10 @@ def parse(raw: bytes, *, filename: str = "", fmt: str = "auto", lang: str | None
             dupes += 1
             continue
         seen.add(key)
-        docs.append({"text": text, "lang": dlang, "entities": ents})
+        docs.append({"text": text, "lang": dlang, "entities": ents, **({"category": cat} if cat else {})})
     by_lang = Counter(d["lang"] for d in docs)
     by_label = Counter(e["label"] for d in docs for e in d["entities"])
+    by_category = Counter(d["category"] for d in docs if d.get("category"))
     label_by_lang: dict[str, Counter] = {}
     for d in docs:
         label_by_lang.setdefault(d["lang"], Counter()).update(e["label"] for e in d["entities"])
@@ -135,7 +141,7 @@ def parse(raw: bytes, *, filename: str = "", fmt: str = "auto", lang: str | None
         warnings.append(f"{dupes} duplicate texts were removed.")
     valid = not errors and not id_lines
     report = {"source_format": fmt, "records_read": len(records), "documents": len(docs), "duplicates_removed": dupes,
-              "entities": sum(by_label.values()), "by_language": dict(by_lang), "by_label": dict(by_label),
+              "entities": sum(by_label.values()), "by_language": dict(by_lang), "by_label": dict(by_label), "by_category": dict(by_category),
               "label_by_language": {k: dict(v) for k, v in label_by_lang.items()}, "warnings": warnings}
     return {"valid": valid, "errors": errors[:MAX_ERRORS_SHOWN], "errors_total": len(errors),
             "identifier_lines": id_lines[:MAX_ERRORS_SHOWN], "identifier_lines_total": len(id_lines),

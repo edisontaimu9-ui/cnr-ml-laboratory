@@ -1361,7 +1361,9 @@
   function reportView(rep) {
     const labels = Object.keys(rep.by_label || {}).sort();
     const langs = Object.keys(rep.by_language || {}).sort();
+    const cats = Object.entries(rep.by_category || {});
     return [
+      cats.length ? h("p", { class: "muted" }, "Document types: " + cats.map(([k, n]) => k + " " + n).join(", ") + ".") : null,
       h("div", { class: "stats" }, nlpStat("Documents", rep.documents), nlpStat("Entities", rep.entities), nlpStat("Duplicates removed", rep.duplicates_removed || 0), nlpStat("Source format", rep.source_format || "")),
       langs.length ? table(["Language", "Documents", ...labels.map(labelName)], langs.map((l) => [langName(l), rep.by_language[l], ...labels.map((k) => ((rep.label_by_language || {})[l] || {})[k] || 0)])) : null,
       labels.length ? h("p", { class: "muted" }, "Entities per label: " + labels.map((k) => labelName(k) + " " + rep.by_label[k]).join(", ") + ".") : null,
@@ -1466,18 +1468,20 @@
     const ver = h("select", { id: "tv" }, c.versions.map((v) => h("option", { value: v.version }, "Version " + v.version + " (" + v.documents + " documents)")));
     const iter = num("tn", 30, 5, 100, 1), drop = num("td", 0.2, 0, 0.5, 0.05), test = num("tt", 0.2, 0.1, 0.4, 0.05), seed = num("ts", 1, 0, 2147483647, 1);
     const trial = h("input", { id: "tr", type: "checkbox" });
+    const task = h("select", { id: "tk" }, h("option", { value: "ner" }, "Entity model (finds foods, conditions, nutrients)"), h("option", { value: "langid" }, "Language identification"), h("option", { value: "classify" }, "Document-type classifier (needs a category on the documents)"));
+    const valsize = num("tvs", 0.1, 0, 0.3, 0.05);
     const err = h("p", { class: "error", role: "alert" });
     const go = h("button", { class: "primary", onclick: async () => {
       err.textContent = ""; go.disabled = true;
       try {
-        const r = await api("/v1/nlp/training", { method: "POST", body: JSON.stringify({ corpus_id: c.id, version: Number(ver.value), n_iter: Number(iter.value), dropout: Number(drop.value), test_size: Number(test.value), seed: Number(seed.value), trial: trial.checked }) });
+        const r = await api("/v1/nlp/training", { method: "POST", body: JSON.stringify({ task: task.value, val_size: Number(valsize.value), corpus_id: c.id, version: Number(ver.value), n_iter: Number(iter.value), dropout: Number(drop.value), test_size: Number(test.value), seed: Number(seed.value), trial: trial.checked }) });
         location.hash = "corpora/run-" + r.id;
       } catch (e) { err.textContent = e.message; go.disabled = false; }
     } }, "Start training");
     return h("details", { class: "card" }, h("summary", null, "Train an entity model on this corpus"),
       h("p", null, "Trains a spaCy entity model from scratch and scores it on held-out documents against the rule baseline, on the same documents. The number of passes is fixed up front and nothing is tuned on the test set."),
-      h("div", { class: "notice" }, "A normal run needs at least " + m.documents + " documents and " + m.examples_per_label + " examples of every label that appears; smaller corpora are refused. A trial run lowers this to " + m.trial_documents + " documents and " + m.trial_examples_per_label + " examples so the pipeline can be tried. Its results are marked trial and cannot be registered or used."),
-      h("div", { class: "form3" }, field("Corpus version", ver, "tv"), field("Passes over the data (5 to 100)", iter, "tn"), field("Dropout (0 to 0.5)", drop, "td"), field("Share held out for testing (0.1 to 0.4)", test, "tt"), field("Random seed", seed, "ts")),
+      h("div", { class: "notice" }, "A normal entity run needs at least " + m.documents + " documents and " + m.examples_per_label + " examples of every label that appears; language and document-type models need " + m.documents + " documents and " + (m.documents_per_class_text_models || m.examples_per_label) + " of every class. Smaller corpora are refused. A trial run lowers this to " + m.trial_documents + " documents and " + m.trial_examples_per_label + " examples so the pipeline can be tried. Its results are marked trial and cannot be registered or used."),
+      h("div", { class: "form3" }, field("What to train", task, "tk"), field("Corpus version", ver, "tv"), field("Passes over the data (5 to 100, entity model only)", iter, "tn"), field("Dropout (0 to 0.5)", drop, "td"), field("Share held out for testing (0.1 to 0.4)", test, "tt"), field("Share kept for validation (0 to 0.3)", valsize, "tvs"), field("Random seed", seed, "ts")),
       h("div", null, h("label", { for: "tr" }, "Trial run (tiny corpus, results not for use)"), trial), go, err);
   }
 
@@ -1541,9 +1545,11 @@
     if (res.notice) out.push(h("div", { class: "notice" }, res.notice));
     (res.warnings || []).forEach((w) => out.push(h("div", { class: "notice" }, w)));
     if (res.skipped_misaligned) out.push(h("div", { class: "notice" }, res.skipped_misaligned + " document(s) were skipped because an entity boundary fell inside a word."));
-    out.push(h("p", { class: "muted" }, (res.engine || "spacy-ner-xx") + " · baseline " + (res.baseline_engine || "nlp-rules-1") + " · " + (cfg.n_iter || "?") + " passes, dropout " + (cfg.dropout ?? "?") + ", test share " + (cfg.test_size ?? "?") + ", seed " + (cfg.seed ?? "?")));
+    out.push(h("p", { class: "muted" }, (res.task ? res.task + " · " : "") + (res.engine || "spacy-ner-xx") + " · baseline " + (res.baseline_engine || "nlp-rules-1") + " · " + (cfg.n_iter || "?") + (cfg.n_iter ? " passes, dropout " + (cfg.dropout ?? "?") : " chosen C " + (cfg.chosen_C ?? "?")) + ", validation share " + (cfg.val_size ?? 0) + ", test share " + (cfg.test_size ?? "?") + ", seed " + (cfg.seed ?? "?")));
+    if (res.validation && res.validation.documents) out.push(h("p", { class: "muted" }, res.validation.documents + " validation documents. " + (res.validation.best_epoch ? "The best epoch was " + res.validation.best_epoch + ". " : "") + (res.validation.note || "")));
+    if (res.majority_class) out.push(h("p", { class: "muted" }, "Always answering " + res.majority_class.class + " would score " + res.majority_class.test_accuracy + ". " + res.majority_class.note));
     out.push(h("div", { class: "stats" }, nlpStat("Model macro F1", n3((res.model || {}).macro_f1)), nlpStat("Rules macro F1", n3((res.rules || {}).macro_f1)),
-      nlpStat("Training documents", split.train_documents ?? "—"), nlpStat("Test documents", split.test_documents ?? "—")));
+      nlpStat("Training documents", split.train_documents ?? "—"), nlpStat("Validation documents", split.validation_documents ?? 0), nlpStat("Test documents", split.test_documents ?? "—")));
     out.push(h("p", null, "Overall: ", verdictBadge(cmp.verdict), cmp.difference != null ? " (F1 difference " + signed(cmp.difference) + " on " + cmp.support + " test entities)" : "",
       h("span", { class: "muted" }, " " + ((res.comparison || {}).note || ""))));
     out.push(...evalSections(res));
@@ -1572,7 +1578,7 @@
   // ----- model registry and review -----
   async function nlpModelList() {
     const rows = await api("/v1/nlp/models?limit=200");
-    return [h("div", { class: "notice" }, "A version moves from candidate to in review to approved or rejected. Approval is per language and only records that a different person read the evaluation and accepted the model for the languages listed. It does not make the model clinically validated, and nothing serves an NLP model yet."),
+    return [h("div", { class: "notice" }, "A version moves from candidate to in review to approved or rejected. Approval is per language and only records that a different person read the evaluation and accepted the model for the languages listed. It does not make the model clinically validated. An administrator can then deploy an approved version, and only a deployed version is served, and only for the languages it was approved for."),
       rows.length ? table(["Model", "Version", "Status", "Model F1", "Rules F1", "Verdict", "Approved languages", "Registered by", "Registered", ""], rows.map((v) => {
         const hl = v.headline || {};
         return [v.name, "v" + v.version, vBadge(v.status), n3(hl.macro_f1_model), n3(hl.macro_f1_rules), verdictBadge(hl.overall_verdict),
@@ -1607,7 +1613,17 @@
     } }, "Submit for review")));
     if (v.status === "in_review" && can("approve:models")) act.push(nlpReviewForm(v, m, reload));
     if (v.status === "in_review" && !can("approve:models")) act.push(h("div", { class: "notice" }, "Waiting for a clinical reviewer."));
-    if (v.status === "approved" && can("approve:models")) act.push(h("p", null, h("button", { class: "danger", onclick: async () => {
+    if (v.status === "approved" && can("deploy:models")) act.push(h("p", null, h("button", { class: "primary", onclick: async (ev) => {
+      if (!confirm("Serve v" + v.version + " of " + v.name + " for " + (v.approved_languages || []).map(langName).join(", ") + "? A version already deployed under this name will be retired.")) return;
+      ev.target.disabled = true;
+      try { await api("/v1/nlp/models/" + id + "/deploy", { method: "POST", body: JSON.stringify({}) }); reload(); } catch (e) { alert(e.message); ev.target.disabled = false; }
+    } }, "Deploy this version")));
+    if (v.status === "deployed" && can("deploy:models")) act.push(h("p", null, h("button", { onclick: async () => {
+      if (!confirm("Roll back? This version will be withdrawn and the one it replaced will be served again.")) return;
+      try { await api("/v1/nlp/models/by-name/" + encodeURIComponent(v.name) + "/rollback", { method: "POST", body: JSON.stringify({}) }); location.hash = "corpora/models"; } catch (e) { alert(e.message); }
+    } }, "Roll back to the previous version")));
+    if (v.status === "deployed") out.splice(3, 0, h("div", { class: "notice" }, h("b", null, "Serving. "), "Deployed " + fmt(v.deployed_at) + " by " + (v.deployed_by || "—") + ". Call POST /v1/nlp/serving/" + v.name + "/predict with predict:models permission."));
+    if ((v.status === "approved" || v.status === "deployed") && can("approve:models")) act.push(h("p", null, h("button", { class: "danger", onclick: async () => {
       const why = prompt("Why is this version being withdrawn? (10+ characters)");
       if (!why) return;
       try { await api("/v1/nlp/models/" + id + "/retire", { method: "POST", body: JSON.stringify({ reason: why.trim() }) }); reload(); } catch (e) { alert(e.message); }

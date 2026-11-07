@@ -93,7 +93,7 @@ def test_run_trains_evaluates_on_held_out_documents_and_saves_a_loadable_model()
     docs = synthetic(80, 60)
     res, blob = nt.run(docs, n_iter=8, seed=2)
     sp = res["split"]
-    assert sp["train_documents"] + sp["test_documents"] == len(docs) and set(sp["test_by_language"]) == {"en", "ny"}
+    assert sp["train_documents"] + sp["validation_documents"] + sp["test_documents"] == len(docs) and set(sp["test_by_language"]) == {"en", "ny"}
     assert set(res["model"]["per_label"]) == {"FOOD", "POPULATION", "SYMPTOM"} and set(res["rules"]["per_label"]) == set(res["model"]["per_label"])
     assert len(res["loss_by_epoch"]) == 8 and res["trial"] is False and "notice" in res
     assert res["comparison"]["overall"]["verdict"] in {"model better", "rules better", "no clear difference", "too few examples", "not comparable"}

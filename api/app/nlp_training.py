@@ -60,6 +60,27 @@ def split(docs: list[dict], test_size: float, seed: int) -> tuple[list[dict], li
     return train, test
 
 
+def split3(docs: list[dict], val_size: float, test_size: float, seed: int, key=lambda d: d["lang"]) -> tuple[list[dict], list[dict], list[dict]]:
+    """Train, validation and test, stratified by `key` (the language, or the class for a text model). The test part is chosen exactly as
+    `split` chooses it, so adding a validation share only takes documents out of training. A group too small to give up a validation
+    document and still keep two for training gets none (val_size 0 gives none anywhere)."""
+    rng = random.Random(seed)
+    groups: dict = defaultdict(list)
+    for d in docs:
+        groups[key(d)].append(d)
+    train, val, test = [], [], []
+    for g in sorted(groups):
+        grp = sorted(groups[g], key=lambda d: d["text"])
+        rng.shuffle(grp)
+        n = len(grp)
+        n_test = min(n - 1, max(1, round(n * test_size))) if n >= 2 else 0
+        n_val = min(n - n_test - 2, max(1, round(n * val_size))) if val_size > 0 and n - n_test >= 3 else 0
+        test += grp[:n_test]
+        val += grp[n_test:n_test + n_val]
+        train += grp[n_test + n_val:]
+    return train, val, test
+
+
 def check_enough(docs: list[dict], trial: bool) -> list[str]:
     """Refuses a corpus that is too small to train on. Returns warnings for what was allowed through."""
     min_label, min_docs = (TRIAL_MIN_EXAMPLES_PER_LABEL, TRIAL_MIN_DOCS) if trial else (MIN_EXAMPLES_PER_LABEL, MIN_DOCS)
@@ -169,20 +190,22 @@ def rule_predictions(docs: list[dict], labels: set[str]) -> list[list[tuple]]:
 
 
 # ---------------------------------------------------------------- run
-def run(docs: list[dict], *, n_iter: int = 30, dropout: float = 0.2, test_size: float = 0.2, seed: int = 1, trial: bool = False) -> tuple[dict, bytes]:
+def run(docs: list[dict], *, n_iter: int = 30, dropout: float = 0.2, test_size: float = 0.2, seed: int = 1, trial: bool = False,
+        val_size: float = 0.1) -> tuple[dict, bytes]:
     """Trains and evaluates. Returns (results, model_bytes). Raises TrainingError for a corpus that cannot or should not be trained on."""
     warnings = check_enough(docs, trial)
     spacy, Example, compounding, fix_random_seed, minibatch = _spacy()
     fix_random_seed(seed)
     labels = sorted({e["label"] for d in docs for e in d["entities"]})
-    train_docs, test_docs = split(docs, test_size, seed)
+    train_docs, val_docs, test_docs = split3(docs, val_size, test_size, seed)
     nlp = spacy.blank("xx")
     ner = nlp.add_pipe("ner")
     for lab in labels:
         ner.add_label(lab)
     train_ex, skipped_train = _examples(nlp, train_docs, Example)
     test_ex, skipped_test = _examples(nlp, test_docs, Example)
-    lost = skipped_train + skipped_test
+    val_ex, skipped_val = _examples(nlp, val_docs, Example)
+    lost = skipped_train + skipped_test + skipped_val
     if lost / len(docs) > MAX_MISALIGNED_SHARE:
         raise TrainingError(f"{lost} of {len(docs)} documents have entity boundaries that do not fall on word boundaries, "
                             "so the annotation does not fit the tokeniser. Check the spans (no stray punctuation or part-words).")
@@ -192,13 +215,24 @@ def run(docs: list[dict], *, n_iter: int = 30, dropout: float = 0.2, test_size: 
         raise TrainingError("After the split there are no training or no test documents. Add more documents.")
     nlp.initialize(lambda: train_ex)
     rng = random.Random(seed)
-    losses_by_epoch = []
-    for _ in range(n_iter):
+    losses_by_epoch, val_curve, best = [], [], (-1.0, 0, None)         # best = (validation F1, epoch, weights)
+    val_texts = {ex.reference.text for ex in val_ex}
+    val_kept = [d for d in val_docs if d["text"] in val_texts]
+    val_gold = [[(e["start"], e["end"], e["label"]) for e in d["entities"]] for d in val_kept]
+    for epoch in range(1, n_iter + 1):
         rng.shuffle(train_ex)
         losses: dict = {}
         for batch in minibatch(train_ex, size=compounding(4.0, 32.0, 1.001)):
             nlp.update(batch, drop=dropout, losses=losses)
         losses_by_epoch.append(round(float(losses.get("ner", 0.0)), 2))
+        if val_kept:                                         # the validation set picks the epoch; the test set is never looked at
+            vp = [[(e.start_char, e.end_char, e.label_) for e in doc.ents] for doc in nlp.pipe([d["text"] for d in val_kept])]
+            vf = score(val_gold, vp, [d["lang"] for d in val_kept], labels)["overall"]["f1"] or 0.0
+            val_curve.append(round(vf, 3))
+            if vf > best[0]:
+                best = (vf, epoch, nlp.to_bytes())
+    if best[2] is not None:
+        nlp.from_bytes(best[2])
     # evaluation on held-out documents only
     kept_texts = {ex.reference.text for ex in test_ex}
     held = [d for d in test_docs if d["text"] in kept_texts]
@@ -207,14 +241,17 @@ def run(docs: list[dict], *, n_iter: int = 30, dropout: float = 0.2, test_size: 
     model_pred = [[(e.start_char, e.end_char, e.label_) for e in doc.ents] for doc in nlp.pipe([d["text"] for d in held])]
     model = score(gold, model_pred, langs, labels)
     rules = score(gold, rule_predictions(held, set(labels)), langs, labels)
-    split_info = {"train_documents": len(train_ex), "test_documents": len(held),
+    split_info = {"train_documents": len(train_ex), "validation_documents": len(val_kept), "test_documents": len(held),
                   "train_by_language": dict(Counter(d["lang"] for d in train_docs)), "test_by_language": dict(Counter(langs)),
+                  "validation_by_language": dict(Counter(d["lang"] for d in val_kept)),
                   "train_by_label": dict(Counter(e["label"] for d in train_docs for e in d["entities"])),
                   "test_by_label": dict(Counter(e["label"] for d in held for e in d["entities"]))}
     for lang in sorted({d["lang"] for d in docs} - set(langs)):
         warnings.append(f"No {lang} documents in the test set, so {lang} was not evaluated.")
     results = {"engine": "spacy-ner-xx", "spacy": spacy.__version__, "baseline_engine": nlp_lab.ENGINE_VERSION, "trial": trial,
-               "config": {"n_iter": n_iter, "dropout": dropout, "test_size": test_size, "seed": seed},
+               "config": {"n_iter": n_iter, "dropout": dropout, "test_size": test_size, "val_size": val_size, "seed": seed},
+               "validation": {"documents": len(val_kept), "f1_by_epoch": val_curve, "best_epoch": best[1] if best[2] is not None else None,
+                              "note": "The validation set chose the epoch whose weights were kept. The test set was not used for any choice."},
                "labels": labels, "split": split_info, "loss_by_epoch": losses_by_epoch, "model": model, "rules": rules,
                "comparison": compare(model, rules), "skipped_misaligned": lost, "warnings": warnings, "notice": NOTICE}
     return results, model_to_bytes(nlp)

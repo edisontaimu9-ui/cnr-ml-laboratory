@@ -10,11 +10,13 @@ import io
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import Response
+from typing import Literal
+
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .. import audit, nlp_training, storage
+from .. import audit, nlp_textmodels, nlp_training, storage
 from ..db import SessionLocal, get_db
 from ..jobs import another_job_running
 from ..models import NlpCorpus, NlpCorpusVersion, NlpTrainingRun, utcnow
@@ -25,11 +27,13 @@ router = APIRouter(prefix="/v1/nlp/training", tags=["nlp"])
 
 
 class TrainingCreate(BaseModel):
+    task: Literal["ner", "langid", "classify"] = Field("ner", description="ner: entity model. langid: language identification. classify: document-type classifier (needs a category on the documents).")
     corpus_id: int
     version: int | None = Field(None, ge=1, description="Corpus version; the latest if left out.")
     n_iter: int = Field(30, ge=5, le=100, description="Passes over the training documents. Fixed up front; nothing is tuned on the test set.")
     dropout: float = Field(0.2, ge=0.0, le=0.5)
     test_size: float = Field(0.2, ge=0.1, le=0.4)
+    val_size: float = Field(0.1, ge=0.0, le=0.3, description="Share kept apart to choose the best epoch (entity model) or the regularisation (text models). 0 turns it off. The test set is never used for a choice.")
     seed: int = Field(1, ge=0, le=2**31 - 1)
     trial: bool = Field(False, description="Allow a tiny corpus so the pipeline can be tried. The run is marked trial and its results are not for use.")
 
@@ -41,7 +45,7 @@ def _summary(r: NlpTrainingRun) -> dict:
     if r.status != "completed":
         return {}
     cmp_ = res.get("comparison", {})
-    return {"macro_f1_model": (res.get("model") or {}).get("macro_f1"), "macro_f1_rules": (res.get("rules") or {}).get("macro_f1"),
+    return {"task": res.get("task", "ner"), "macro_f1_model": (res.get("model") or {}).get("macro_f1"), "macro_f1_rules": (res.get("rules") or {}).get("macro_f1"),
             "overall_verdict": (cmp_.get("overall") or {}).get("verdict"), "test_documents": (res.get("split") or {}).get("test_documents"),
             "warnings": len(res.get("warnings", [])), "trial": bool(res.get("trial"))}
 
@@ -50,7 +54,7 @@ def _out(db: Session, r: NlpTrainingRun, detail: bool = False) -> dict:
     v = db.get(NlpCorpusVersion, r.corpus_version_id)
     c = db.get(NlpCorpus, v.corpus_id) if v else None
     base = {"id": r.id, "corpus_id": c.id if c else None, "corpus_name": c.name if c else None, "corpus_version": v.version if v else None,
-            "status": r.status, "trial": bool(r.trial), "summary": _summary(r), "created_by": r.created_by,
+            "status": r.status, "task": (r.params_json or {}).get("task", "ner"), "trial": bool(r.trial), "summary": _summary(r), "created_by": r.created_by,
             "created_at": r.created_at.isoformat() + "Z", "finished_at": r.finished_at.isoformat() + "Z" if r.finished_at else None}
     if detail:
         base.update(params=r.params_json or {}, results=r.results_json or {})
@@ -64,16 +68,17 @@ def list_runs(limit: int = Query(50, ge=1, le=200), db: Session = Depends(get_db
 
 @router.get("/limits", dependencies=[Depends(require("read:experiments"))])
 def limits():
-    return {"engine": "spacy-ner-xx", "baseline": "nlp-rules-1",
+    return {"engine": "spacy-ner-xx", "baseline": "nlp-rules-1", "tasks": {"ner": "entities", "langid": "language", "classify": "document type (category)"},
             "minimums": {"examples_per_label": nlp_training.MIN_EXAMPLES_PER_LABEL, "documents": nlp_training.MIN_DOCS,
-                         "trial_examples_per_label": nlp_training.TRIAL_MIN_EXAMPLES_PER_LABEL, "trial_documents": nlp_training.TRIAL_MIN_DOCS},
+                         "trial_examples_per_label": nlp_training.TRIAL_MIN_EXAMPLES_PER_LABEL, "trial_documents": nlp_training.TRIAL_MIN_DOCS,
+                         "documents_per_class_text_models": nlp_textmodels.MIN_PER_CLASS},
             "verdict": {"min_test_entities": nlp_training.MIN_SUPPORT, "min_f1_difference": nlp_training.MARGIN},
             "notice": nlp_training.NOTICE}
 
 
 MAX_RESULTS_BYTES, MAX_MODEL_BYTES = 2 * 1024 * 1024, 300 * 1024 * 1024
 EXTERNAL_ENGINE = "spacy-ner-external-gpu"
-_RESULT_KEYS = ("engine", "base_model", "spacy", "baseline_engine", "trial", "config", "labels", "split", "loss_by_epoch", "model", "rules",
+_RESULT_KEYS = ("validation", "engine", "base_model", "spacy", "baseline_engine", "trial", "config", "labels", "split", "loss_by_epoch", "model", "rules",
                 "skipped_misaligned", "warnings", "notice", "corpus")
 
 
@@ -170,7 +175,11 @@ def start_run(body: TrainingCreate, request: Request, background: BackgroundTask
         raise HTTPException(404, "Unknown corpus version.")
     # refuse too-small corpora now, so the person hears it in the response instead of finding a failed run later
     try:
-        nlp_training.check_enough(nlp_training.read_corpus(storage.load_bytes(v.storage_uri)), body.trial)
+        corpus = nlp_training.read_corpus(storage.load_bytes(v.storage_uri))
+        if body.task == "ner":
+            nlp_training.check_enough(corpus, body.trial)
+        else:
+            nlp_textmodels.check_enough(corpus, body.task, body.trial)
     except nlp_training.TrainingError as e:
         audit.record(db, "nlp.training_refused", principal=p, request=request, resource_type="nlp_corpus", resource_id=v.corpus_id, detail={"reason": str(e)[:200]})
         raise HTTPException(422, str(e))
@@ -182,7 +191,7 @@ def start_run(body: TrainingCreate, request: Request, background: BackgroundTask
     db.add(r)
     db.commit()
     audit.record(db, "nlp.training_created", principal=p, request=request, resource_type="nlp_training", resource_id=r.id,
-                 detail={"corpus": v.corpus_id, "version": v.version, "trial": body.trial, "n_iter": body.n_iter})
+                 detail={"corpus": v.corpus_id, "version": v.version, "task": body.task, "trial": body.trial, "n_iter": body.n_iter})
     background.add_task(run_training, r.id)
     return _out(db, r, detail=True)
 
@@ -199,7 +208,12 @@ def run_training(run_id: int) -> None:
             v = db.get(NlpCorpusVersion, r.corpus_version_id)
             docs = nlp_training.read_corpus(storage.load_bytes(v.storage_uri))
             pr = r.params_json
-            results, model = nlp_training.run(docs, n_iter=pr["n_iter"], dropout=pr["dropout"], test_size=pr["test_size"], seed=pr["seed"], trial=pr["trial"])
+            task = pr.get("task", "ner")
+            if task == "ner":
+                results, model = nlp_training.run(docs, n_iter=pr["n_iter"], dropout=pr["dropout"], test_size=pr["test_size"], seed=pr["seed"], trial=pr["trial"],
+                                                  val_size=pr.get("val_size", 0.1))
+            else:
+                results, model = nlp_textmodels.run(docs, task, test_size=pr["test_size"], val_size=pr.get("val_size", 0.15), seed=pr["seed"], trial=pr["trial"])
             results["corpus"] = {"corpus_id": v.corpus_id, "version": v.version, "sha256": v.sha256}
             r.artifact_uri = storage.save_bytes(f"nlp_training/run{r.id}.zip", model)
             r.results_json, r.status = results, "completed"

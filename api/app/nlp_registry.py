@@ -17,13 +17,13 @@ NAME = re.compile(r"^[a-z0-9][a-z0-9-]{2,62}$")
 
 def language_flags(results: dict) -> dict[str, dict]:
     split = results.get("split") or {}
-    train, test = split.get("train_by_language") or {}, split.get("test_by_language") or {}
+    train, test, val = split.get("train_by_language") or {}, split.get("test_by_language") or {}, split.get("validation_by_language") or {}
     per_lang = (results.get("model") or {}).get("per_language") or {}
     rules_lang = (results.get("rules") or {}).get("per_language") or {}
     verdicts = (results.get("comparison") or {}).get("per_language") or {}
     out: dict[str, dict] = {}
-    for lang in sorted(set(train) | set(test)):
-        total_docs = train.get(lang, 0) + test.get(lang, 0)
+    for lang in sorted(set(train) | set(test) | set(val)):
+        total_docs = train.get(lang, 0) + val.get(lang, 0) + test.get(lang, 0)
         flags, blocking = [], False
         if not test.get(lang):
             flags.append("not evaluated: no held-out documents in this language")
@@ -47,7 +47,8 @@ def headline(results: dict) -> dict:
     cmp_ = (results.get("comparison") or {}).get("overall") or {}
     return {"macro_f1_model": (results.get("model") or {}).get("macro_f1"), "macro_f1_rules": (results.get("rules") or {}).get("macro_f1"),
             "overall_verdict": cmp_.get("verdict"), "test_documents": (results.get("split") or {}).get("test_documents"),
-            "labels": results.get("labels"), "languages": sorted((results.get("split") or {}).get("train_by_language") or {})}
+            "labels": results.get("labels"), "languages": sorted((results.get("split") or {}).get("train_by_language") or {}),
+            "task": results.get("task", "ner"), "engine": results.get("engine")}
 
 
 def approval_problems(results: dict, approved: list[str], acknowledged: bool) -> list[str]:
