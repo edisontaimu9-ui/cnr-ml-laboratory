@@ -2070,6 +2070,10 @@
               ["Refusals as expected", evalRate(sa.refusals.recall), evalRate(sb.refusals.recall)],
               ["Over-refusal", evalRate(sa.refusals.over_refusal_rate), evalRate(sb.refusals.over_refusal_rate)],
               ["Errors", String(sa.errors), String(sb.errors)]]),
+            barChart(["Fact coverage", "Answers grounded", "Numbers supported", "Refusals as expected"],
+              [{ name: "A · " + c.a.label, color: "#8a9ba2", values: [sa.groundedness.fact_coverage.mean, sa.groundedness.grounded_rate.rate, sa.groundedness.numeric_support_rate.rate, sa.refusals.recall.rate] },
+               { name: "B · " + c.b.label, color: "#0e5a73", values: [sb.groundedness.fact_coverage.mean, sb.groundedness.grounded_rate.rate, sb.groundedness.numeric_support_rate.rate, sb.refusals.recall.rate] }],
+              "Higher is better for every bar."),
             h("p", { class: "muted" }, c.note));
         } catch (e) { err.textContent = e.message; }
       } }, "Compare")];
@@ -2089,6 +2093,9 @@
       : h("div", { class: "notice" }, h("b", null, "Not enough evidence for any quality claim. "), h("ul", { class: "plain" }, ready.reasons.map((x) => h("li", null, x)))));
     out.push(h("div", { class: "stats" }, nlpStat("Retrieval hit rate", pct1(s.retrieval.hit_rate.rate)), nlpStat("Cited an expected source", pct1(s.citations.cited_source_hit_rate.rate)),
       nlpStat("Answers grounded", pct1(g.grounded_rate.rate)), nlpStat("Refusals as expected", pct1(s.refusals.recall.rate))));
+    out.push(h("h2", null, "At a glance"), barChart(["Retrieval hit rate", "Cited expected source", "Answers grounded", "Numbers supported", "Fact coverage", "Refusals as expected"],
+      [{ name: "This run", color: "#0e5a73", values: [s.retrieval.hit_rate.rate, s.citations.cited_source_hit_rate.rate, g.grounded_rate.rate, g.numeric_support_rate.rate, g.fact_coverage.mean, s.refusals.recall.rate] }],
+      "Higher is better for every bar. A missing bar means no question could measure it."));
     out.push(table(["Measure", "Result"], [
       ["Retrieval hit rate", evalRate(s.retrieval.hit_rate)], ["Mean reciprocal rank", s.retrieval.mean_reciprocal_rank == null ? "—" : s.retrieval.mean_reciprocal_rank],
       ["Answer cites an expected source", evalRate(s.citations.cited_source_hit_rate)],
@@ -2284,6 +2291,25 @@
       h("p", null, addBtn), add,
       h("div", { class: "inline" }, h("div", null, h("label", { for: "nq" }, "Search"), q), h("div", null, h("label", { for: "nfk" }, "Type"), kind), h("div", null, h("label", { for: "nfs" }, "About"), subj)),
       h("p", null, h("label", null, arch, " Show archived")), list];
+  }
+
+  function barChart(labels, series, caption) {
+    const NS = "http://www.w3.org/2000/svg", W = 560, rowH = 20 + series.length * 14, pl = 150, pr = 44, H = 12 + labels.length * rowH;
+    const el = (tag, attrs) => { const e = document.createElementNS(NS, tag); for (const [a, v] of Object.entries(attrs || {})) e.setAttribute(a, v); return e; };
+    const svg = el("svg", { viewBox: "0 0 " + W + " " + H, role: "img", width: "100%", "aria-label": caption });
+    const sx = (v) => pl + Math.max(0, Math.min(1, v)) * (W - pl - pr);
+    [0, 0.25, 0.5, 0.75, 1].forEach((g) => svg.appendChild(el("line", { x1: sx(g), x2: sx(g), y1: 4, y2: H - 4, stroke: "#e3eaec" })));
+    labels.forEach((lab, i) => {
+      const y0 = 8 + i * rowH, t = el("text", { x: pl - 8, y: y0 + rowH / 2, "text-anchor": "end", "font-size": 11, fill: "#34454c" }); t.textContent = lab; svg.appendChild(t);
+      series.forEach((s, k) => {
+        const v = s.values[i], y = y0 + k * 14;
+        if (v == null) { const n = el("text", { x: pl + 4, y: y + 10, "font-size": 10.5, fill: "#5b6b72" }); n.textContent = "no data"; svg.appendChild(n); return; }
+        svg.appendChild(el("rect", { x: pl, y, width: Math.max(1, sx(v) - pl).toFixed(1), height: 11, rx: 2, fill: s.color }));
+        const n = el("text", { x: sx(v) + 4, y: y + 10, "font-size": 10.5, fill: "#34454c" }); n.textContent = (100 * v).toFixed(1) + "%"; svg.appendChild(n);
+      });
+    });
+    const legend = series.length > 1 ? h("p", { class: "muted" }, series.map((s) => h("span", { style: "margin-right:12px" }, h("span", { style: "color:" + s.color }, "■ "), s.name))) : null;
+    return h("div", null, svg, legend, h("p", { class: "muted" }, caption));
   }
 
   function table(head, rows) {
