@@ -70,6 +70,16 @@ class Settings(BaseSettings):
     summary_max_output_tokens: int = 700
     summary_timeout_s: float = 30.0
     summary_review_ttl_s: int = 3600
+    # Open-weight models (Qwen3.5 first choice, Gemma 4 second) on an OpenAI-compatible server you run (vLLM etc.), optionally with a LoRA adapter.
+    # Server-side only. Used by summarisation when a request asks for provider "openweight". Off until OPENWEIGHT_ENABLED=true.
+    openweight_enabled: bool = False
+    openweight_api_url: str = ""
+    openweight_api_key: SecretStr = SecretStr("")
+    openweight_model: str = "qwen3.5-9b"
+    openweight_models: str = "qwen3.5-9b,qwen3.5-27b,gemma-4-e4b,gemma-4-12b"
+    openweight_served: str = ""          # "id=served-name,..." (for example a LoRA adapter: cnr-qwen=cnr-qwen-lora)
+    openweight_disable_thinking: bool = True
+    openweight_timeout_s: float = 90.0
     service_version: str = "0.9.0"
     # Dataset ingestion
     dataset_storage_dir: str = "./data/datasets"

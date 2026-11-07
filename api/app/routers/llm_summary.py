@@ -15,7 +15,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from .. import llm_audit, llm_extract, llm_groq, llm_policy, llm_summary, nlp_lab
+from .. import llm_audit, llm_extract, llm_groq, llm_openweight, llm_policy, llm_summary, nlp_lab
 from ..config import get_settings
 from ..db import get_db
 from ..models import utcnow
@@ -34,6 +34,7 @@ class SummariseRequest(BaseModel):
     identifiers: Literal["mask", "reject"] | None = None
     use_model: bool = True
     model: str | None = Field(default=None, max_length=60)
+    provider: Literal["groq", "openweight"] = "groq"
 
 
 class ReviewRequest(BaseModel):
@@ -46,7 +47,7 @@ class ReviewRequest(BaseModel):
 @router.get("/status", dependencies=[Depends(require("read:llm"))])
 def status():
     s = get_settings()
-    return {"summarisation": llm_groq.public_status(s), "prompt": llm_summary.PROMPT_VERSION, "extractor": nlp_lab.ENGINE_VERSION,
+    return {"summarisation": llm_groq.public_status(s), "openweight": llm_openweight.public_status(s), "prompt": llm_summary.PROMPT_VERSION, "extractor": nlp_lab.ENGINE_VERSION,
             "limits": {"max_note_chars": s.summary_max_chars, "max_facts": llm_extract.MAX_FACTS, "max_sentences": llm_summary.MAX_SENTENCES,
                        "review_ttl_s": s.summary_review_ttl_s},
             "review_checklist": llm_summary.REVIEW_CHECKLIST, "extraction_limits": llm_extract.EXTRACTION_LIMITS,
@@ -56,14 +57,16 @@ def status():
 @router.post("")
 def summarise(body: SummariseRequest, request: Request, g: base.Gated = Depends(base.gate_summarise), db: Session = Depends(get_db)):
     s, rid, mode = get_settings(), str(uuid.uuid4()), base._mode(body.identifiers)
-    model = (body.model or llm_groq.default_model(s)) if body.use_model else None
+    prov = llm_openweight if body.provider == "openweight" else llm_groq
+    perr = (llm_openweight.OpenWeightError, llm_groq.GroqError)
+    model = (body.model or prov.default_model(s)) if body.use_model else None
     audit_base = dict(kind="document", mode=mode, chars=len(body.note), policy=llm_policy.POLICY_CODE, model_used=bool(body.use_model))
     if not s.summary_enabled:
         return base._failure(db, g, request, "llm.summarise", rid, audit_base, "not_configured", "Summarisation is off (SUMMARY_ENABLED=false).", 503)
     if body.use_model:
-        if model not in llm_groq.models(s):
-            raise HTTPException(422, "That model is not in the allow-list. Choose one of: " + ", ".join(llm_groq.models(s)) + ".")
-        bad = llm_groq.key_problem(s)
+        if model not in prov.models(s):
+            raise HTTPException(422, "That model is not in the allow-list. Choose one of: " + ", ".join(prov.models(s)) + ".")
+        bad = prov.key_problem(s)
         if bad:
             return base._failure(db, g, request, "llm.summarise", rid, audit_base, "not_configured", bad + " Untick the model option to extract facts only.", 503)
 
@@ -85,11 +88,11 @@ def summarise(body: SummariseRequest, request: Request, g: base.Gated = Depends(
     if body.use_model and facts:
         t0 = time.monotonic()
         try:
-            r = llm_groq.chat_json(s, model, llm_summary.build_messages(facts), max_tokens=s.summary_max_output_tokens, correlation_id=rid)
+            r = prov.chat_json(s, model, llm_summary.build_messages(facts), max_tokens=s.summary_max_output_tokens, correlation_id=rid)
             ms = int((time.monotonic() - t0) * 1000)
             validation = llm_summary.validate_output(r["content"], facts, note.text)
             usage = r
-        except llm_groq.GroqError as e:
+        except perr as e:
             return base._failure(db, g, request, "llm.summarise", rid, audit_base, "upstream_error", str(e), 502)
         except llm_summary.BadOutput as e:
             return base._failure(db, g, request, "llm.summarise", rid, audit_base, "bad_output", str(e), 502)
@@ -101,12 +104,12 @@ def summarise(body: SummariseRequest, request: Request, g: base.Gated = Depends(
             warnings.append("No sentence passed validation, so there is no summary. The extracted facts are still shown.")
         if flagged:
             warnings.append(f"{flagged} sentence(s) contain words that are not in the note or the facts; they are marked for the reviewer.")
-        summary = {"generated_by": {"provider": "groq", "model": model, "prompt": llm_summary.PROMPT_VERSION},
+        summary = {"generated_by": {"provider": body.provider, "model": model, "prompt": llm_summary.PROMPT_VERSION},
                    "sentences": [{"text": x.text, "facts": x.facts, "flags": x.flags} for x in validation.accepted],
                    "text": " ".join(x.text for x in validation.accepted), "rejected": {"count": validation.rejected, "reasons": validation.audit_reasons},
                    "coverage": cov, "latency_ms": ms}
     elif body.use_model:
-        summary = {"generated_by": {"provider": "groq", "model": model, "prompt": llm_summary.PROMPT_VERSION}, "sentences": [], "text": "",
+        summary = {"generated_by": {"provider": body.provider, "model": model, "prompt": llm_summary.PROMPT_VERSION}, "sentences": [], "text": "",
                    "rejected": {"count": 0, "reasons": {}}, "coverage": {"facts": 0, "used": 0, "not_mentioned": []}, "latency_ms": 0}
 
     # 5. pending clinician review (id and counts only)
@@ -120,6 +123,7 @@ def summarise(body: SummariseRequest, request: Request, g: base.Gated = Depends(
                  prompt=llm_summary.PROMPT_CODE, **{k: v for k, v in audit_base.items() if k != "model_used"})
     if model:
         audit["model"] = model
+        audit["provider"] = body.provider
     if validation:
         audit.update(sentences=n_valid + validation.rejected, sentences_valid=n_valid, sentences_rejected=validation.rejected,
                      numbers_checked=validation.numbers_checked, reject_reasons=validation.audit_reasons, flagged_sentences=flagged)

@@ -353,8 +353,8 @@ def test_key_is_never_visible_in_settings_status_or_responses(client, monkeypatc
 def test_only_the_gateway_reads_the_consumer_key_and_the_dashboard_never_sees_it():
     readers = [p.name for p in APP_DIR.rglob("*.py") if "chakudya_consumer_key" in p.read_text() and p.name not in ("config.py", "llm_gateway.py")]
     assert readers == []
-    # each secret has exactly one reader: the Chakudya key in llm_gateway.py, the Groq key (phase 4) in llm_groq.py
-    assert "get_secret_value" not in "".join(p.read_text() for p in APP_DIR.rglob("*.py") if p.name not in ("llm_gateway.py", "llm_groq.py"))
+    # each secret has exactly one reader: the Chakudya key in llm_gateway.py, the Groq key (phase 4) in llm_groq.py, the open-weight server key in llm_openweight.py
+    assert "get_secret_value" not in "".join(p.read_text() for p in APP_DIR.rglob("*.py") if p.name not in ("llm_gateway.py", "llm_groq.py", "llm_openweight.py"))
     assert [p.name for p in APP_DIR.rglob("*.py") if "groq_api_key" in p.read_text() and p.name not in ("config.py", "llm_groq.py")] == []
     assert "chakudya_consumer_key" not in (APP_DIR / "llm_groq.py").read_text() and "groq_api_key" not in (APP_DIR / "llm_gateway.py").read_text()
     for f in (ROOT / "dashboard").glob("*"):

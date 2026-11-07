@@ -1,0 +1,9 @@
+# Install on the GPU machine (Colab, Kaggle, RunPod, Lambda...), not in the API image.
+torch
+transformers>=5.0
+peft>=0.14
+trl>=0.20
+accelerate>=1.0
+datasets>=3.0
+bitsandbytes>=0.45      # 4-bit QLoRA (Linux + NVIDIA only)
+huggingface_hub

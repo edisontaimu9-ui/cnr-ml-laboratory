@@ -1,0 +1,12 @@
+{
+  "model_id": "Qwen/Qwen3.5-9B",
+  "load_in_4bit": true,
+  "lora_r": 16,
+  "lora_alpha": 32,
+  "lora_dropout": 0.05,
+  "learning_rate": 0.0002,
+  "epochs": 2,
+  "max_seq_len": 2048,
+  "per_device_batch_size": 2,
+  "grad_accum": 8
+}

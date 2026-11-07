@@ -58,6 +58,15 @@ services:
         sync: false
       - key: GROQ_MODEL
         value: llama-3.3-70b-versatile
+      # Open-weight models (Qwen3.5 first, Gemma 4 second) on a GPU host you run. The key is a secret: set it in the Render dashboard.
+      - key: OPENWEIGHT_ENABLED
+        value: "false"
+      - key: OPENWEIGHT_API_URL
+        sync: false
+      - key: OPENWEIGHT_API_KEY
+        sync: false
+      - key: OPENWEIGHT_MODEL
+        value: qwen3.5-9b
   - type: web
     name: cnr-ml-lab-dashboard
     runtime: static
