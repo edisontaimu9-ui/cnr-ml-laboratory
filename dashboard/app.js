@@ -14,7 +14,7 @@
       else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
       else if (v !== false && v != null) el.setAttribute(k, v === true ? "" : v);
     }
-    for (const kid of kids.flat()) if (kid != null) el.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
+    for (const kid of kids.flat(Infinity)) if (kid != null) el.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
     return el;
   }
   const fmt = (iso) => (iso ? new Date(iso).toLocaleString() : "—");
