@@ -6,6 +6,12 @@
   let me = null;
 
   // Safe DOM builder: text is always set via textContent / createTextNode.
+  // Safety net: the browser turns null, undefined and nested arrays passed to append/replaceChildren into the words "null", "undefined" or "[object ...]".
+  // Flatten and drop empties instead, so a missing optional piece shows nothing rather than stray text.
+  for (const m of ["append", "prepend", "replaceChildren"]) {
+    const orig = Element.prototype[m];
+    Element.prototype[m] = function (...a) { return orig.apply(this, a.flat(Infinity).filter((x) => x != null && x !== false)); };
+  }
   function h(tag, attrs, ...kids) {
     const el = document.createElement(tag);
     for (const [k, v] of Object.entries(attrs || {})) {
