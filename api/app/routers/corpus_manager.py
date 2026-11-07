@@ -135,7 +135,7 @@ def _upload_error(e: Exception, db, request, p):
 @router.get("/info", dependencies=[Depends(require("read:datasets"))])
 def info():
     return {"domains": cm.DOMAINS, "tasks": cm.TASKS, "languages": sorted(cm.LANG_CODES), "entity_labels": sorted(cm.ENTITY_LABELS),
-            "categories": sorted(cm.CATEGORIES), "statuses": list(cm.STATUSES), "upload_formats": cm.UPLOAD_FORMATS, "export_formats": list(cm.EXPORT_FORMATS),
+            "categories": sorted(cm.CATEGORIES), "statuses": list(cm.STATUSES), "upload_formats": cm.UPLOAD_FORMATS, "upload_accept": cm.ACCEPT, "export_formats": list(cm.EXPORT_FORMATS),
             "conflict_policies": cm.CONFLICT_POLICIES, "limits": {"records_per_upload": cm.MAX_UPLOAD_RECORDS, "records_per_corpus": cm.MAX_CORPUS_RECORDS,
                                                                  "characters_per_text": cm.MAX_CHARS},
             "rules": ["Text with identifiers (titled names, phone numbers, emails, record or ID numbers) is refused whole.",

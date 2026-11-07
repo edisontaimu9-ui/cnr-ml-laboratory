@@ -359,3 +359,66 @@ def test_ner_export_is_accepted_by_the_existing_nlp_corpus_validator():
     task = cm.build_task(rows, "ner", test_size=0, val_size=0)
     res = nlp_corpus.parse(cm.export_rows(task["rows"], task["columns"], "jsonl"), filename="ner.jsonl")
     assert res["valid"] and res["report"]["documents"] == 2 and res["report"]["entities"] == 2
+
+
+# ------------------------------------------------------------------ more upload formats
+def _docx(*paras):
+    import zipfile
+    ns = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+    body = "".join(f"<w:p><w:r><w:t>{p}</w:t></w:r></w:p>" for p in paras)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("word/document.xml", f"<w:document {ns}><w:body>{body}</w:body></w:document>")
+    return buf.getvalue()
+
+
+def test_tsv_json_and_xlsx_read_like_csv_and_jsonl():
+    t = cm.parse_upload(b"text\tlang\tcategory\nThe child ate rice.\ten\tdietary_record\n", filename="a.tsv")
+    assert t["rows"][0]["category"] == "dietary_record" and t["report"]["source_format"] == "tsv"
+    j = cm.parse_upload(json.dumps({"documents": [{"text": "Beans are food.", "lang": "en", "entities": []}, {"nope": 1}]}).encode(), filename="a.json")
+    assert len(j["rows"]) == 1 and j["rows"][0]["status"] == "annotated" and j["skipped_total"] == 1
+    import openpyxl
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["Text", "Lang", "Entities"])
+    ws.append(["The child ate rice.", "en", "child|POPULATION"])
+    ws.append([None, None, None])
+    ws.append(["Maize flour is a staple.", "en", None])
+    buf = io.BytesIO()
+    wb.save(buf)
+    x = cm.parse_upload(buf.getvalue(), filename="a.xlsx")
+    assert len(x["rows"]) == 2 and x["rows"][0]["entities"][0]["label"] == "POPULATION" and x["rows"][1]["status"] == "unannotated"
+    with pytest.raises(cm.CorpusManagerError):
+        cm.parse_upload(b"not a workbook", filename="a.xlsx")
+
+
+def test_documents_are_split_into_unannotated_sentences():
+    para = "Breastfeed the baby for six months. Then add nsima and beans to the diet."
+    for name, raw in (("a.docx", _docx(para)), ("a.md", ("# Feeding\n\n" + para).encode()), ("a.html", f"<html><body><p>{para}</p></body></html>".encode())):
+        r = cm.parse_upload(raw, filename=name, lang="en")
+        assert r["valid"] and len(r["rows"]) >= 2 and {x["status"] for x in r["rows"]} == {"unannotated"} and r["report"]["source_format"] == "document", name
+    assert cm.parse_upload(_docx("Fine text here for the test, with enough words."), filename="noext", fmt="docx", lang="en")["valid"]
+    with pytest.raises(cm.CorpusManagerError):
+        cm.parse_upload(b"not a word file", filename="a.docx", lang="en")
+
+
+def test_annotation_tool_formats_bio_and_conll_keep_entities():
+    bio = b"# lang = en\nThe O\nchild B-POPULATION\nate O\nrice B-FOOD\n.  O\n"
+    r = cm.parse_upload(bio, filename="a.bio")
+    assert r["valid"] and [e["label"] for e in r["rows"][0]["entities"]] == ["POPULATION", "FOOD"] and r["rows"][0]["lang"] == "en"
+    with pytest.raises(cm.CorpusManagerError):
+        cm.parse_upload(b"x", filename="a.exe")
+
+
+def test_identifiers_are_refused_in_every_new_format_too():
+    raw = _docx("Call Mr Banda on 0999123456 about the child today please.")
+    r = cm.parse_upload(raw, filename="a.docx", lang="en")
+    assert not r["valid"] and r["identifier_lines_total"] == 1
+
+
+def test_api_accepts_a_document_upload(client, people):
+    ds = people["ds"]
+    cid = make(client, ds, "Docs upload", "research_documents", default_lang="en", tasks=["langid"])
+    r = upload(client, ds, cid, _docx("Exclusive breastfeeding protects infants. Complementary foods start at six months."), name="paper.docx")
+    assert r.status_code == 201 and r.json()["report"]["source_format"] == "document" and r.json()["upload_id"]
+    assert "docx" in client.get("/v1/cm/info", headers=ds).json()["upload_accept"]

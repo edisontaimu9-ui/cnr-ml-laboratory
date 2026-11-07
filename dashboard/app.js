@@ -2431,7 +2431,7 @@
   // ----- corpora list and creation -----
   async function cmCorpora() {
     const [rows, meta] = await Promise.all([api("/v1/cm/corpora"), cmMeta()]);
-    const out = [h("div", { class: "notice" }, "Keep each kind of nutrition text in its own corpus (English, Chichewa, clinical nutrition, foods and nutrients, community nutrition, research documents). Upload CSV, JSONL or TXT, annotate, fix what the quality check finds, and have a reviewer approve it. Approved corpora can then be merged into one versioned master dataset. Merging builds data only: no model is trained, and the corpora themselves are never changed.")];
+    const out = [h("div", { class: "notice" }, "Keep each kind of nutrition text in its own corpus (English, Chichewa, clinical nutrition, foods and nutrients, community nutrition, research documents). Upload a file (CSV, Excel, JSON, TXT, Word, PDF and more), annotate, fix what the quality check finds, and have a reviewer approve it. Approved corpora can then be merged into one versioned master dataset. Merging builds data only: no model is trained, and the corpora themselves are never changed.")];
     out.push(h("h2", null, "Corpora"));
     out.push(rows.length
       ? table(["Corpus", "Domain", "State", "Records", "Annotated", "Not annotated", "Last edited", ""], rows.map((c) => [c.name, meta.domains[c.domain] ? c.domain.replace(/_/g, " ") : c.domain, cmState(c.state), c.records,
@@ -2520,7 +2520,7 @@
   }
 
   function cmUpload(c, reload) {
-    const file = h("input", { id: "cm-file", type: "file", accept: ".csv,.jsonl,.ndjson,.txt" });
+    const file = h("input", { id: "cm-file", type: "file", accept: (cmInfo || {}).upload_accept || ".csv,.jsonl,.txt" });
     const lang = h("select", { id: "cm-ulang" }, h("option", { value: "" }, c.default_lang ? "Corpus default (" + langName(c.default_lang) + ")" : "From the file"), Object.entries(LANGS).map(([k, v]) => h("option", { value: k }, v)));
     const src = h("input", { id: "cm-usrc", maxlength: 120, placeholder: "Optional source label" });
     const err = h("p", { class: "error", role: "alert" }), result = h("div");
@@ -2539,7 +2539,7 @@
       try { await api("/v1/cm/corpora/" + c.id + "/uploads", { method: "POST", body: build() }); reload(); }
       catch (e) { err.textContent = e.message; if (e.detail) result.replaceChildren(...show1(e.detail).flat(Infinity).filter(Boolean)); }
     } }, "Add to corpus");
-    return h("details", { class: "card" }, h("summary", null, "Upload CSV, JSONL or TXT"),
+    return h("details", { class: "card" }, h("summary", null, "Upload a file (CSV, Excel, JSONL, JSON, TXT, Word, PDF and more)"),
       h("ul", { class: "plain" }, Object.entries((cmInfo || {}).upload_formats || {}).map(([k, v]) => h("li", null, h("b", null, k.toUpperCase() + ": "), v))),
       h("p", { class: "muted" }, "Text with identifiers is refused whole. Only text, language, category, entities, source and id are kept. A CSV with an empty entities cell counts as not yet annotated; in JSONL an empty list [] confirms there are none. A file can be added only once. Editing an approved corpus withdraws its approval."),
       h("div", { class: "form3" }, field("File", file, "cm-file"), field("Language for records without one", lang, "cm-ulang"), field("Source label", src, "cm-usrc")),

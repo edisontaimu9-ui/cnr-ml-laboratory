@@ -19,7 +19,7 @@ import re
 import unicodedata
 from collections import Counter, defaultdict
 
-from . import nlp_corpus, nlp_formats, nlp_lab
+from . import nlp_corpus, nlp_extract, nlp_formats, nlp_lab
 
 DOMAINS = {
     "english": "English-language nutrition text",
@@ -33,9 +33,25 @@ DOMAINS = {
 TASKS = {"ner": "Entity recognition", "classification": "Text classification (document category)", "langid": "Language identification"}
 STATUSES = ("unannotated", "annotated", "reviewed", "rejected")
 CORPUS_STATES = ("draft", "in_review", "approved", "rejected")
-UPLOAD_FORMATS = {"csv": "Columns: text (required), lang, category, entities, source, id. `entities` is `word|LABEL; word|LABEL` or a JSON list.",
-                  "jsonl": "One JSON object per line: text (required), lang, category, entities, source, id. Entities are objects or [start, end, label].",
-                  "txt": "One text per line. No annotations: choose the language for the upload, and annotate afterwards."}
+UPLOAD_FORMATS = {
+    "csv": "Columns: text (required), lang, category, entities, source, id. `entities` is `word|LABEL; word|LABEL` or a JSON list.",
+    "tsv": "Same columns as CSV, separated by tabs.",
+    "xlsx": "Excel workbook: the first sheet, with a header row and the same columns as CSV.",
+    "jsonl": "One JSON object per line: text (required), lang, category, entities, source, id. Entities are objects or [start, end, label].",
+    "json": "One JSON array of such objects, or an object with a `documents` (or `records`) list.",
+    "txt": "One text per line. No annotations: choose the language for the upload, and annotate afterwards.",
+    "document": "Word (.docx), PDF with selectable text, PowerPoint (.pptx), OpenDocument (.odt), HTML (.html) or Markdown (.md). The text is split into sentences, each becoming an unannotated record.",
+    "bio": "BIO / IOB2 tagging: one `token TAG` per line, blank line between sentences (annotation tools such as doccano and Label Studio export this).",
+    "conll": "CoNLL-2003 style columns: the last column is the tag.",
+    "docbin": "spaCy DocBin (.spacy) with entity annotations.",
+    "brat": "BRAT standoff: a ZIP of paired name.txt and name.ann files.",
+}
+EXTENSIONS = {".csv": "csv", ".tsv": "tsv", ".tab": "tsv", ".xlsx": "xlsx", ".xlsm": "xlsx", ".jsonl": "jsonl", ".ndjson": "jsonl", ".json": "json",
+              ".txt": "txt", ".bio": "bio", ".iob": "bio", ".iob2": "bio", ".conll": "conll", ".conll03": "conll", ".spacy": "docbin", ".zip": "brat",
+              **{e: "document" for e in nlp_extract.DOCUMENT_EXTENSIONS}}
+FORMAT_ALIASES = {"ndjson": "jsonl", "iob": "bio", "iob2": "bio", "conll2003": "conll", "spacy": "docbin", "excel": "xlsx", "tab": "tsv",
+                  **{e[1:]: "document" for e in nlp_extract.DOCUMENT_EXTENSIONS}}
+ACCEPT = ",".join(sorted(EXTENSIONS))
 LANG_CODES = nlp_corpus.LANG_CODES
 ENTITY_LABELS = nlp_corpus.TRAIN_LABELS
 CATEGORIES = nlp_corpus.CATEGORIES
@@ -175,14 +191,14 @@ def _decode(raw: bytes) -> str:
 def detect_format(fmt: str | None, filename: str) -> str:
     fmt = (fmt or "auto").strip().lower()
     if fmt != "auto":
+        fmt = FORMAT_ALIASES.get(fmt, fmt)
         if fmt not in UPLOAD_FORMATS:
-            raise CorpusManagerError("format must be one of " + ", ".join(UPLOAD_FORMATS) + " (or auto).")
+            raise CorpusManagerError("format must be auto or one of " + ", ".join(UPLOAD_FORMATS) + ".")
         return fmt
-    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
-    ext = {"ndjson": "jsonl"}.get(ext, ext)
-    if ext in UPLOAD_FORMATS:
-        return ext
-    raise CorpusManagerError("Only CSV, JSONL and TXT files can be uploaded. Set format, or name the file .csv, .jsonl or .txt.")
+    ext = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    if ext in EXTENSIONS:
+        return EXTENSIONS[ext]
+    raise CorpusManagerError("This file type is not supported. Use " + ", ".join(sorted(EXTENSIONS)) + ", or set format.")
 
 
 def _entities_from_cell(text: str, cell: str) -> tuple[list[dict] | None, str | None]:
@@ -212,63 +228,143 @@ def _row(where: str, obj: dict) -> dict:
             "ext_id": _clean_source(obj.get("id")), "status": clean_status(obj.get("status"))}
 
 
-def _read_txt(raw: bytes):
-    return [(f"line {n}", {"text": ln.strip()}, None) for n, ln in enumerate(_decode(raw).splitlines(), start=1) if ln.strip()]
+def _read_txt(raw: bytes, **_):
+    return [(f"line {n}", {"text": ln.strip()}, None) for n, ln in enumerate(_decode(raw).splitlines(), start=1) if ln.strip()], []
 
 
-def _read_jsonl(raw: bytes):
+def _obj_record(where: str, obj):
+    """One JSON object (from JSONL or JSON) as a row."""
+    if not isinstance(obj, dict) or not isinstance(obj.get("text"), str):
+        return (where, None, "needs a JSON object with a text string")
+    item = {"text": obj["text"], "lang": obj.get("lang"), "source": obj.get("source"), "id": obj.get("id"), "status": obj.get("status"),
+            "category": obj.get("category", obj.get("label") if isinstance(obj.get("label"), str) else None)}
+    # `entities` must be a list (anything else is an unreadable annotation, kept and flagged); doccano-style `label`/`labels` count only when they are lists
+    key = next((k for k in ("entities", "labels", "label") if k in obj and (k == "entities" or isinstance(obj[k], list))), None)
+    item["entities"], item["parse_note"] = clean_entities(obj[key]) if key else (None, None)
+    return (where, item, None)
+
+
+def _read_jsonl(raw: bytes, **_):
     out = []
     for n, ln in enumerate(_decode(raw).splitlines(), start=1):
-        if not ln.strip():
-            continue
-        try:
-            obj = json.loads(ln)
-        except json.JSONDecodeError:
-            out.append((f"line {n}", None, "not valid JSON"))
-            continue
-        if not isinstance(obj, dict) or not isinstance(obj.get("text"), str):
-            out.append((f"line {n}", None, "needs a JSON object with a text string"))
-            continue
-        item = {"text": obj["text"], "lang": obj.get("lang"), "source": obj.get("source"), "id": obj.get("id"), "status": obj.get("status")}
-        cat = obj.get("category", obj.get("label") if isinstance(obj.get("label"), str) else None)
-        item["category"] = cat
-        # `entities` must be a list (anything else is an unreadable annotation, kept and flagged); doccano-style `label`/`labels` count only when they are lists
-        key = next((k for k in ("entities", "labels", "label") if k in obj and (k == "entities" or isinstance(obj[k], list))), None)
-        item["entities"], item["parse_note"] = clean_entities(obj[key]) if key else (None, None)
-        out.append((f"line {n}", item, None))
-    return out
+        if ln.strip():
+            try:
+                out.append(_obj_record(f"line {n}", json.loads(ln)))
+            except json.JSONDecodeError:
+                out.append((f"line {n}", None, "not valid JSON"))
+    return out, []
 
 
-def _read_csv(raw: bytes):
+def _read_json(raw: bytes, **_):
     try:
-        rows = list(csv.DictReader(io.StringIO(_decode(raw), newline="")))
-    except csv.Error as e:
-        raise CorpusManagerError(f"The CSV could not be read: {str(e)[:120]}")
+        data = json.loads(_decode(raw))
+    except json.JSONDecodeError:
+        raise CorpusManagerError("The file is not valid JSON.")
+    if isinstance(data, dict):
+        data = next((data[k] for k in ("documents", "records", "data") if isinstance(data.get(k), list)), None)
+    if not isinstance(data, list):
+        raise CorpusManagerError("The JSON must be an array of documents, or an object with a documents list.")
+    return [_obj_record(f"item {n}", o) for n, o in enumerate(data, start=1)], []
+
+
+def _from_table(rows: list[dict]):
+    """Rows keyed by column name (CSV, TSV, Excel) as records."""
     if not rows:
-        return []
+        return [], []
     if "text" not in {(k or "").strip().lower() for k in rows[0]}:
-        raise CorpusManagerError("The CSV needs a text column.")
+        raise CorpusManagerError("The table needs a text column.")
     out = []
     for n, r in enumerate(rows, start=2):
-        low = {(k or "").strip().lower(): (v or "") for k, v in r.items() if k}
+        low = {(k or "").strip().lower(): ("" if v is None else str(v)) for k, v in r.items() if k}
         text = low.get("text", "")
         item = {"text": text, "lang": low.get("lang") or low.get("language"), "source": low.get("source"),
-                "id": low.get("id") or low.get("doc_id"), "status": None,
-                "category": low.get("category") or low.get("class")}
+                "id": low.get("id") or low.get("doc_id"), "status": None, "category": low.get("category") or low.get("class")}
         item["entities"], item["parse_note"] = _entities_from_cell(text, low.get("entities", ""))
         out.append((f"row {n}", item, None))
-    return out
+    return out, []
+
+
+def _read_delimited(raw: bytes, delimiter: str = ",", **_):
+    try:
+        return _from_table(list(csv.DictReader(io.StringIO(_decode(raw), newline=""), delimiter=delimiter)))
+    except csv.Error as e:
+        raise CorpusManagerError(f"The file could not be read: {str(e)[:120]}")
+
+
+def _read_xlsx(raw: bytes, **_):
+    try:
+        nlp_extract._open_zip(raw, "Excel")                         # size and bomb limits
+        import openpyxl
+        wb = openpyxl.load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
+        it = wb.worksheets[0].iter_rows(values_only=True)
+        head = next(it, None)
+        if not head:
+            return [], []
+        names = [("" if h is None else str(h)).strip() for h in head]
+        rows = []
+        for vals in it:
+            if all(v is None or str(v).strip() == "" for v in vals):
+                continue
+            rows.append(dict(zip(names, vals)))
+            if len(rows) > MAX_UPLOAD_RECORDS:
+                break
+        wb.close()
+    except nlp_extract.ExtractError as e:
+        raise CorpusManagerError(str(e))
+    except CorpusManagerError:
+        raise
+    except Exception:
+        raise CorpusManagerError("The Excel file could not be read. Save it as .xlsx and try again.")
+    return _from_table(rows)
+
+
+def _read_document(raw: bytes, filename: str = "", fmt_hint: str = "", **_):
+    ext = nlp_extract.extension(filename)
+    if ext not in nlp_extract.DOCUMENT_EXTENSIONS:
+        ext = "." + fmt_hint if "." + fmt_hint in nlp_extract.DOCUMENT_EXTENSIONS else ext
+    try:
+        sentences = nlp_extract.split_sentences(nlp_extract.extract_text(raw, "x" + ext))
+    except nlp_extract.ExtractError as e:
+        raise CorpusManagerError(str(e))
+    return [(f"sentence {n}", {"text": t}, None) for n, t in enumerate(sentences, start=1)], \
+           ["The document was split into sentences. Check that the splits are right before annotating."]
+
+
+def _read_annotation_tool(fmt: str):
+    def read(raw: bytes, lang: str | None = None, **_):
+        try:
+            recs, notes = nlp_formats.load(raw, fmt, lang)
+        except nlp_formats.FormatError as e:
+            raise CorpusManagerError(str(e))
+        out = []
+        for where, obj, err in recs:
+            parts = None if err else nlp_corpus._doc_parts(obj, lang)
+            if parts is None:
+                out.append((where, None, err or "needs a text string"))
+                continue
+            text, dlang, ents, cat = parts
+            item = {"text": text, "lang": dlang, "category": cat}
+            item["entities"], item["parse_note"] = clean_entities(ents)
+            out.append((where, item, None))
+        return out, list(notes)
+    return read
+
+
+READERS = {"txt": _read_txt, "jsonl": _read_jsonl, "json": _read_json, "csv": _read_delimited, "tsv": lambda raw, **k: _read_delimited(raw, "\t"),
+           "xlsx": _read_xlsx, "document": _read_document, **{f: _read_annotation_tool(f) for f in ("bio", "conll", "docbin", "brat")}}
 
 
 def parse_upload(raw: bytes, *, filename: str = "", fmt: str = "auto", lang: str | None = None, source: str | None = None) -> dict:
     """Reads and checks an upload. Returns {valid, rows, skipped, identifier_lines, identifier_types, report}.
     Only identifiers (or an unreadable file) make it invalid: rows with other problems are skipped and listed, and annotation problems
     are kept on the row so the quality check can show them. `lang` is the default for rows without a language."""
+    fmt_in = (fmt or "auto").strip().lower()
     fmt = detect_format(fmt, filename)
     default_lang = clean_lang(lang)
     if default_lang is not None and default_lang not in LANG_CODES:
         raise CorpusManagerError("lang must be one of " + ", ".join(sorted(LANG_CODES)))
-    records = {"txt": _read_txt, "jsonl": _read_jsonl, "csv": _read_csv}[fmt](raw)
+    hint = (fmt_in if fmt_in in FORMAT_ALIASES and FORMAT_ALIASES[fmt_in] == "document" else "")
+    records, notes = READERS[fmt](raw, filename=filename, lang=default_lang, fmt_hint=hint)
     if not records:
         raise CorpusManagerError("The file has no records.")
     if len(records) > MAX_UPLOAD_RECORDS:
@@ -288,7 +384,7 @@ def parse_upload(raw: bytes, *, filename: str = "", fmt: str = "auto", lang: str
             id_types.update(e["norm"] for e in phi)
             continue
         r = _row(where, obj)
-        r["text"] = text.strip() if fmt == "txt" else text
+        r["text"] = text.strip() if fmt in ("txt", "document") else text
         r["lang"] = r["lang"] or default_lang
         r["source"] = r["source"] or _clean_source(source)
         rows.append(r)
@@ -297,13 +393,13 @@ def parse_upload(raw: bytes, *, filename: str = "", fmt: str = "auto", lang: str
         complete_by_data = r["entities"] is not None or r["category"] is not None
         r["status"] = r["status"] if r["status"] in ("unannotated", "annotated") else ("annotated" if complete_by_data and not r["parse_note"] else "unannotated")
     hashes = Counter(text_hash(r["text"]) for r in rows)
-    warnings = []
+    warnings = list(notes)
     if skipped:
         warnings.append(f"{len(skipped)} record(s) were skipped (see the list).")
     if any(r["parse_note"] for r in rows):
         warnings.append(f"{sum(1 for r in rows if r['parse_note'])} record(s) have an annotation that could not be read. They are kept and flagged.")
-    if fmt == "txt":
-        warnings.append("A TXT file has no annotations: every record starts as unannotated.")
+    if fmt in ("txt", "document"):
+        warnings.append("This file has no annotations: every record starts as unannotated.")
     report = {"source_format": fmt, "records_read": len(records), "records": len(rows), "skipped": len(skipped),
               "repeated_in_file": sum(n - 1 for n in hashes.values() if n > 1),
               "by_language": dict(Counter(r["lang"] or "(missing)" for r in rows)),
