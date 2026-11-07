@@ -3,9 +3,13 @@
 Runs one at a time with the other heavy jobs. Needs the same permissions as experiments (`write:experiments` to start,
 `read:experiments` to read). The training text is read from the corpus store and never copied into the results; the audit log keeps
 counts only. Nothing is registered, deployed or served: stage 3 adds review and approval."""
+import json
 import logging
+import zipfile
+import io
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -65,6 +69,87 @@ def limits():
                          "trial_examples_per_label": nlp_training.TRIAL_MIN_EXAMPLES_PER_LABEL, "trial_documents": nlp_training.TRIAL_MIN_DOCS},
             "verdict": {"min_test_entities": nlp_training.MIN_SUPPORT, "min_f1_difference": nlp_training.MARGIN},
             "notice": nlp_training.NOTICE}
+
+
+MAX_RESULTS_BYTES, MAX_MODEL_BYTES = 2 * 1024 * 1024, 300 * 1024 * 1024
+EXTERNAL_ENGINE = "spacy-ner-external-gpu"
+_RESULT_KEYS = ("engine", "base_model", "spacy", "baseline_engine", "trial", "config", "labels", "split", "loss_by_epoch", "model", "rules",
+                "skipped_misaligned", "warnings", "notice", "corpus")
+
+
+def _version(db: Session, corpus_id: int, version: int | None) -> NlpCorpusVersion:
+    q = select(NlpCorpusVersion).where(NlpCorpusVersion.corpus_id == corpus_id)
+    q = q.where(NlpCorpusVersion.version == version) if version else q.order_by(NlpCorpusVersion.version.desc())
+    v = db.scalars(q.limit(1)).first()
+    if v is None or not v.storage_uri:
+        raise HTTPException(404, "Unknown corpus version.")
+    return v
+
+
+@router.get("/export/{corpus_id}")
+def export_corpus(corpus_id: int, request: Request, version: int | None = Query(None, ge=1),
+                  p: Principal = Depends(require("write:experiments")), db: Session = Depends(get_db)):
+    """The stored, de-identified corpus version exactly as kept (gzip JSON Lines), for training on an external GPU."""
+    v = _version(db, corpus_id, version)
+    audit.record(db, "nlp.corpus_exported", principal=p, request=request, resource_type="nlp_corpus", resource_id=corpus_id, detail={"version": v.version})
+    return Response(storage.load_bytes(v.storage_uri), media_type="application/gzip",
+                    headers={"Content-Disposition": f'attachment; filename="corpus{corpus_id}-v{v.version}.jsonl.gz"', "X-Corpus-SHA256": v.sha256})
+
+
+def _safe_zip(data: bytes) -> None:
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as z:
+            names = z.namelist()
+            if not names or any(n.startswith(("/", "\\")) or ".." in n.split("/") for n in names):
+                raise ValueError
+            if z.testzip() is not None:
+                raise ValueError
+    except (zipfile.BadZipFile, ValueError):
+        raise HTTPException(422, "The model file is not a valid spaCy model zip.")
+
+
+@router.post("/import", status_code=201)
+async def import_run(request: Request, corpus_id: int = Form(...), version: int | None = Form(None),
+                     results: UploadFile = File(...), model: UploadFile | None = File(None),
+                     p: Principal = Depends(require("write:experiments")), db: Session = Depends(get_db)):
+    """Records a run trained outside this server (external GPU). The results must name this exact corpus version by SHA-256. The verdicts
+    are recomputed here, never taken from the file. The run is marked imported; it still needs review before a model can be approved."""
+    v = _version(db, corpus_id, version)
+    raw = await results.read(MAX_RESULTS_BYTES + 1)
+    if len(raw) > MAX_RESULTS_BYTES:
+        raise HTTPException(413, "results.json is too large.")
+    try:
+        res = json.loads(raw)
+        assert isinstance(res, dict) and res.get("engine") == EXTERNAL_ENGINE
+        assert (res.get("corpus") or {}).get("sha256") == v.sha256
+        for k in ("labels", "split", "model", "rules", "config"):
+            assert k in res
+    except Exception:
+        raise HTTPException(422, "results.json is not from train_ner_gpu.py for this corpus version (engine or corpus SHA-256 does not match).")
+    clean = {k: res[k] for k in _RESULT_KEYS if k in res}
+    try:
+        clean["comparison"] = nlp_training.compare(clean["model"], clean["rules"])
+    except Exception:
+        raise HTTPException(422, "The model and rules results are incomplete.")
+    data = None
+    if model is not None and model.filename:
+        data = await model.read(MAX_MODEL_BYTES + 1)
+        if len(data) > MAX_MODEL_BYTES:
+            raise HTTPException(413, "The model file is larger than " + str(MAX_MODEL_BYTES // 2**20) + " MB.")
+        _safe_zip(data)
+    trial = bool(clean.get("trial"))
+    clean["imported"] = {"external_gpu": True, "by": p.name, "model_file_included": data is not None}
+    clean.setdefault("warnings", []).append("Trained outside this server and imported. Scores were computed by the uploaded script, not here; only the verdicts were recomputed.")
+    params = {**(clean.get("config") or {}), "corpus_id": corpus_id, "corpus_version": v.version, "trial": trial, "external": True}
+    r = NlpTrainingRun(corpus_version_id=v.id, params_json=params, trial=trial, status="completed", results_json=clean, created_by=p.name, finished_at=utcnow())
+    db.add(r)
+    db.flush()
+    if data is not None:
+        r.artifact_uri = storage.save_bytes(f"nlp_training/run{r.id}.zip", data)
+    db.commit()
+    audit.record(db, "nlp.training_imported", principal=p, request=request, resource_type="nlp_training", resource_id=r.id,
+                 detail={"corpus": corpus_id, "version": v.version, "model_file": data is not None, "trial": trial})
+    return _out(db, r, detail=True)
 
 
 @router.get("/{run_id}", dependencies=[Depends(require("read:experiments"))])

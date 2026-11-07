@@ -1418,9 +1418,33 @@
     out.push(table(["Version", "Documents", "Entities", "Approval reference", "Added by", "Added", "SHA-256"], c.versions.map((v) =>
       ["v" + v.version, v.documents, v.entities, v.approval_ref, v.created_by || "—", fmt(v.created_at), (v.sha256 || "").slice(0, 12) + "…"])));
     c.versions.forEach((v, i) => out.push(h("details", { class: "card", open: i === 0 }, h("summary", null, "Version " + v.version + " report"), ...reportView(v.report || {}))));
-    if (limits) out.push(trainingForm(c, limits));
+    if (limits) out.push(trainingForm(c, limits), externalGpuCard(c));
     if (fmts) out.push(corpusUploader(fmts, c));
     return out;
+  }
+
+  // Train outside this server (a GPU machine), then bring the results back. The results must name the exact corpus version.
+  function externalGpuCard(c) {
+    const ver = h("select", { id: "xg-v" }, c.versions.map((v) => h("option", { value: v.version }, "Version " + v.version)));
+    const resF = h("input", { id: "xg-res", type: "file", accept: ".json" }), modF = h("input", { id: "xg-mod", type: "file", accept: ".zip" });
+    const err = h("p", { class: "error", role: "alert" });
+    const dl = h("button", { onclick: async () => {
+      err.textContent = "";
+      try { saveBlob(await api("/v1/nlp/training/export/" + c.id + "?version=" + ver.value, { blob: true }), "corpus" + c.id + "-v" + ver.value + ".jsonl.gz"); } catch (e) { err.textContent = e.message; }
+    } }, "Download corpus");
+    const imp = h("button", { class: "primary", onclick: async () => {
+      err.textContent = "";
+      if (!resF.files[0]) { err.textContent = "Choose the results.json file."; return; }
+      const fd = new FormData(); fd.append("corpus_id", c.id); fd.append("version", ver.value); fd.append("results", resF.files[0]);
+      if (modF.files[0]) fd.append("model", modF.files[0]);
+      imp.disabled = true;
+      try { const r = await api("/v1/nlp/training/import", { method: "POST", body: fd }); location.hash = "corpora/run-" + r.id; } catch (e) { err.textContent = e.message; imp.disabled = false; }
+    } }, "Import results");
+    return h("details", { class: "card" }, h("summary", null, "Train on an external GPU"),
+      h("p", null, "For large corpora or a transformer model. Download the de-identified corpus, train with training/train_ner_gpu.py on a GPU machine, then import the results here. The results must name this exact corpus version, and verdicts are recomputed on the server."),
+      h("div", null, h("label", { for: "xg-v" }, "Corpus version"), ver, " ", dl),
+      h("div", null, h("label", { for: "xg-res" }, "results.json"), resF), h("div", null, h("label", { for: "xg-mod" }, "ner_model.zip (optional, needed to register the model)"), modF),
+      err, imp, h("p", { class: "muted" }, "An imported run is marked as trained outside the server. It still needs clinical review before approval."));
   }
 
   // ----- training -----

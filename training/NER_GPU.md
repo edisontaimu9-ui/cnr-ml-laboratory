@@ -1,8 +1,7 @@
 # NLP entity model on an external GPU
-
-1. In the dashboard, open the corpus and download or keep your de-identified JSONL (one document per line: text, entities as [start, end, label], optional language).
-2. On a GPU machine (Colab, Kaggle or a rented box): `pip install -r requirements-ner.txt`
-3. `python train_ner_gpu.py --data corpus.jsonl --out ner_out --epochs 30` (add `--model <hf-encoder>` to change the encoder, `--cpu` for a small CPU model).
-4. Read `ner_out/results.json` (overall and per-language precision, recall, F1) and keep `ner_out/ner_model.zip`.
-
-The split is seeded and nothing is tuned on the test set. Documents with an entity boundary inside a word are skipped and counted.
+1. Dashboard > NLP > Corpora > open the corpus > "Train on an external GPU" > Download corpus.
+2. On the GPU machine (repo cloned): `pip install -r training/requirements-ner.txt -r api/requirements.txt`
+3. `python training/train_ner_gpu.py --repo . --data corpus1-v1.jsonl.gz --out ner_out`
+   (`--model <hf-encoder>`, `--cpu`, `--epochs`, `--trial`)
+4. Same dashboard card: import `ner_out/results.json` and, to allow registration, `ner_out/ner_model.zip` (max 300 MB).
+The run appears in the training runs list marked imported. Use only the de-identified exported corpus.
